@@ -2,6 +2,8 @@
   "name": "folder-search",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
+  "author": "sato1043@updater.cc",
   "type": "module",
   "scripts": {
     "dev": "vite",

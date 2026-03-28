@@ -2,7 +2,7 @@
 name = "folder-search"
 version = "0.1.0"
 description = "Local knowledge base search application"
-authors = ["you"]
+authors = ["sato1043@updater.cc"]
 edition = "2021"
 
 [lib]

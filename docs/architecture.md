@@ -5,268 +5,387 @@
 Tauri v2のアーキテクチャに従い、フロントエンド（WebView）とネイティブレイヤー（Rust）の2層構成をとる。
 
 ```
-┌──────────────────────────────────────────────┐
-│  フロントエンド（WebView）                      │
-│  React + TypeScript                           │
-│  ├── UI コンポーネント                          │
-│  ├── 状態管理                                  │
-│  └── Tauri IPC（invoke / listen）              │
-├──────────────────────────────────────────────┤
-│  Tauri IPC ブリッジ                             │
-├──────────────────────────────────────────────┤
-│  ネイティブレイヤー（Rust）                      │
-│  ├── commands/    ← Tauri コマンド（IPC API）   │
-│  ├── domain/      ← ドメインロジック            │
-│  │   ├── indexer/   ファイル走査・インデックス   │
-│  │   ├── search/    検索エンジン                │
-│  │   ├── embedding/ ベクトル生成・検索          │
-│  │   └── llm/       LLM推論・RAG              │
-│  ├── infra/       ← インフラストラクチャ        │
-│  │   ├── fs/        ファイルシステム操作        │
-│  │   ├── tantivy/   全文検索エンジン            │
-│  │   ├── onnx/      ONNX Runtime             │
-│  │   └── llama/     llama.cpp バインディング   │
-│  └── config/      ← 設定管理                   │
-└──────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│  フロントエンド（WebView）                              │
+│  React 19 + TypeScript 5.8 + Vite 6                   │
+│  ├── components/     UIコンポーネント                   │
+│  │   ├── layout/     Sidebar, MainPanel               │
+│  │   ├── search/     SearchBar, ResultList, Preview    │
+│  │   └── chat/       ChatMessage                      │
+│  ├── lib/tauri.ts    Tauri IPCラッパー                 │
+│  ├── types/index.ts  共通型定義                        │
+│  └── test/           テストセットアップ・モック          │
+├──────────────────────────────────────────────────────┤
+│  Tauri IPC ブリッジ（invoke / listen / emit）           │
+├──────────────────────────────────────────────────────┤
+│  ネイティブレイヤー（Rust）                              │
+│  ├── commands/mod.rs  Tauri コマンド（13コマンド）       │
+│  ├── domain/          ドメインロジック（トレイト・型）    │
+│  │   ├── indexer/     インデックス構築・チャンク分割      │
+│  │   ├── search/      全文検索・ハイブリッド検索(RRF)    │
+│  │   ├── embedding/   ベクトル生成・検索のトレイト       │
+│  │   └── llm/         LLM推論トレイト・RAGパイプライン  │
+│  └── infra/           インフラ実装                      │
+│      ├── tantivy/     全文検索エンジン                   │
+│      ├── onnx/        ONNX Runtime embedding生成       │
+│      ├── hnsw/        HNSWベクトルインデックス           │
+│      ├── llama/       llama.cpp LLM推論                │
+│      └── model/       モデルダウンロード・管理           │
+└──────────────────────────────────────────────────────┘
 ```
 
 ### 設計原則
 
-- **クリーンアーキテクチャ**: domain層は外部ライブラリに依存しない。infra層が具体的な実装を提供する
-- **依存性の方向**: commands → domain ← infra（domain層が中心、infra層はdomain層のトレイトを実装する）
+- **クリーンアーキテクチャ**: domain層は外部ライブラリに依存しない。infra層がdomain層のトレイトを実装する
+- **依存性の方向**: commands → domain ← infra（domain層が中心）
 - **IPC境界**: フロントエンドとRust間のデータ型は `serde` でシリアライズする
+- **TDD**: テストコードを先に書き、失敗を確認してから実装する
 
 ## 2. 検索パイプライン
 
-### 2.1 全文検索パイプライン（Phase 2）
+### 2.1 全文検索パイプライン
 
 ```
 ユーザーのクエリ文字列
   ↓
-lindera トークナイザ（日本語形態素解析）
+lindera トークナイザ（IPAdic辞書による日本語形態素解析）
   ↓
-tantivy クエリパーサー
+tantivy クエリパーサー（title + body フィールド）
   ↓
 tantivy インデックス検索
   ↓
-BM25 スコアによるランキング
+BM25 スコアによるランキング + スニペット生成
   ↓
-検索結果（ファイルパス、スコア、マッチ箇所のスニペット）
+SearchResult { path, title, snippet, score }
 ```
 
-### 2.2 ハイブリッド検索パイプライン（Phase 3）
+**実装**: `infra/tantivy/mod.rs` の `TantivySearchEngine`
+- `FulltextSearcher` トレイト（`domain/search/mod.rs`）を実装
+- `Indexer` トレイト（`domain/indexer/mod.rs`）を実装
+- tantivy スキーマ: `path`（STRING|STORED）, `title`（TEXT|STORED）, `body`（TEXT|STORED）
+- トークナイザ名: `lang_ja`（lindera + IPAdic）
+
+### 2.2 ベクトル検索パイプライン
+
+```
+ドキュメント登録時:
+  ファイル本文
+    → チャンク分割（500文字、100文字オーバーラップ）
+    → E5プレフィックス付与（"passage: " + テキスト）
+    → ONNX Runtime推論（multilingual-e5-small, 384次元）
+    → HNSWインデックスに挿入
+
+検索時:
+  クエリ文字列
+    → E5プレフィックス付与（"query: " + テキスト）
+    → ONNX Runtime推論 → クエリembedding
+    → HNSW近似最近傍検索（コサイン距離）
+    → VectorSearchResult { chunk_id, source_path, distance, text }
+```
+
+**実装**:
+- チャンク分割: `domain/indexer/chunker.rs` の `split_into_chunks()`
+- embedding生成: `infra/onnx/mod.rs` の `OnnxEmbeddingGenerator`（`EmbeddingGenerator` トレイト実装）
+- ベクトル検索: `infra/hnsw/mod.rs` の `HnswVectorIndex`（`VectorSearcher` トレイト実装）
+
+### 2.3 ハイブリッド検索パイプライン
 
 ```
 ユーザーのクエリ文字列
   ↓
-┌────────────────────┬────────────────────────┐
-│ 全文検索            │ ベクトル検索             │
-│ (tantivy + lindera)│ (ONNX + HNSW)          │
-│ BM25スコア          │ コサイン類似度           │
-└────────┬───────────┴───────────┬────────────┘
-         ↓                      ↓
-    ランキングA             ランキングB
-         ↓                      ↓
-         └──────────┬───────────┘
-                    ↓
-          RRF（Reciprocal Rank Fusion）
-                    ↓
-          統合ランキング
-                    ↓
-          上位N件の検索結果
+┌─────────────────────┬──────────────────────────┐
+│ 全文検索              │ ベクトル検索               │
+│ TantivySearchEngine  │ OnnxEmbeddingGenerator    │
+│ → BM25ランキング      │ + HnswVectorIndex         │
+│ → paths_A            │ → paths_B                 │
+└──────────┬──────────┴────────────┬─────────────┘
+           ↓                       ↓
+     reciprocal_rank_fusion(paths_A, paths_B, k=60)
+           ↓
+     RRF_score = Σ 1/(k + rank_i)
+           ↓
+     HybridSearchResult { path, title, snippet, score, source }
+       source: "fulltext" | "vector" | "hybrid"
 ```
 
-### 2.3 RAGパイプライン（Phase 4）
+**実装**: `domain/search/hybrid.rs` の `reciprocal_rank_fusion()`
+
+### 2.4 RAGパイプライン
 
 ```
 ユーザーの自然言語による質問
   ↓
-ハイブリッド検索（上記2.2）
+ハイブリッド検索（上記2.3）→ 上位5件のファイル
   ↓
-上位N件のチャンク
+コンテキスト構築（各ファイルの先頭1000文字）
   ↓
-プロンプト構築:
-  「以下のコンテキストに基づいて質問に回答してください。
-   回答には参照元のファイル名と該当箇所を付記してください。
-   [コンテキスト: チャンク1, チャンク2, ...]
-   [質問: ユーザーの質問]」
+プロンプト構築（Qwen2 ChatML形式）:
+  <|im_start|>system
+  あなたはナレッジベースに基づいて質問に回答するアシスタントです...
+  <|im_end|>
+  <|im_start|>user
+  ## コンテキスト
+  ### ファイル1: /path/to/file
+  (ファイル内容)
+  ## 質問
+  (ユーザーの質問)
+  <|im_end|>
+  <|im_start|>assistant
   ↓
-llama.cpp 推論（ストリーミング）
+llama.cpp推論（ストリーミング、max 512トークン）
+  → Tauri event "chat-token" でトークン単位送信
   ↓
-回答テキスト + 参照元情報
+回答テキスト + 参照元ファイルパス抽出
   ↓
-UI: ストリーミング表示 + 原文参照リンク
+RagAnswer { answer, sources }
 ```
 
-## 3. コンポーネント設計
+**実装**:
+- プロンプト構築: `domain/llm/rag.rs` の `build_rag_prompt()`
+- 参照元抽出: `domain/llm/rag.rs` の `extract_sources()`
+- LLM推論: `infra/llama/mod.rs` の `LlamaEngine`（`LlmInference` トレイト実装）
+
+## 3. コンポーネント設計（実装済み）
 
 ### 3.1 フロントエンドコンポーネント
 
 ```
 src/
-├── App.tsx                  ← ルートコンポーネント
+├── App.tsx                         ← ルートコンポーネント
+│                                     検索モード/チャットモード切り替え
+│                                     全状態管理（useState）
 ├── components/
 │   ├── layout/
-│   │   ├── Sidebar.tsx      ← サイドバー（フォルダ一覧、設定）
-│   │   └── MainPanel.tsx    ← メインパネル
+│   │   ├── Sidebar.tsx             ← サイドバー（children受け取り）
+│   │   ├── Sidebar.test.tsx
+│   │   ├── MainPanel.tsx           ← メインパネル（children受け取り）
+│   │   └── MainPanel.test.tsx
 │   ├── search/
-│   │   ├── SearchBar.tsx    ← 検索クエリ入力
-│   │   ├── ResultList.tsx   ← 検索結果一覧
-│   │   └── Preview.tsx      ← 原文プレビュー
-│   ├── chat/
-│   │   ├── ChatInput.tsx    ← 質問入力
-│   │   ├── ChatMessage.tsx  ← 回答表示（ストリーミング対応）
-│   │   └── SourceRef.tsx    ← 参照元リンク
-│   └── settings/
-│       ├── FolderConfig.tsx ← フォルダ設定
-│       ├── ModelConfig.tsx  ← モデル設定・ダウンロード
-│       └── IndexStatus.tsx  ← インデックス状態表示
-├── hooks/
-│   ├── useSearch.ts         ← 検索ロジック
-│   ├── useChat.ts           ← チャットロジック
-│   └── useIndex.ts          ← インデックス管理ロジック
+│   │   ├── SearchBar.tsx           ← 検索/質問入力（Enter実行、placeholder可変）
+│   │   ├── SearchBar.test.tsx
+│   │   ├── ResultList.tsx          ← 検索結果一覧（HTMLスニペット、クリック選択）
+│   │   ├── ResultList.test.tsx
+│   │   ├── Preview.tsx             ← 原文プレビュー（pre表示）
+│   │   └── Preview.test.tsx
+│   └── chat/
+│       ├── ChatMessage.tsx         ← LLM回答表示（ストリーミングカーソル、参照元リンク）
+│       └── ChatMessage.test.tsx
+├── lib/
+│   └── tauri.ts                    ← Tauri IPCラッパー（13関数）
 ├── types/
-│   └── index.ts             ← 共通型定義
-└── lib/
-    └── tauri.ts             ← Tauri IPC ラッパー
+│   └── index.ts                    ← 共通型定義（10型）
+├── test/
+│   ├── setup.ts                    ← テストセットアップ
+│   └── tauri-mock.ts               ← Tauri APIモック（テスト環境用）
+├── main.tsx                        ← エントリポイント
+├── index.css                       ← 全スタイル（ダークモード対応）
+└── vite-env.d.ts                   ← Vite型定義
 ```
 
 ### 3.2 Rustモジュール構成
 
 ```
 src-tauri/src/
-├── main.rs                  ← エントリポイント
-├── lib.rs                   ← Tauriアプリ設定
+├── main.rs                         ← エントリポイント
+├── lib.rs                          ← Tauriアプリ設定、AppState初期化、コマンド登録
 ├── commands/
-│   ├── mod.rs
-│   ├── search.rs            ← 検索コマンド
-│   ├── index.rs             ← インデックス管理コマンド
-│   ├── folder.rs            ← フォルダ管理コマンド
-│   ├── model.rs             ← モデル管理コマンド
-│   └── chat.rs              ← チャットコマンド
+│   └── mod.rs                      ← 全Tauriコマンド（13コマンド）
+│                                     AppState構造体定義
 ├── domain/
 │   ├── mod.rs
 │   ├── indexer/
-│   │   ├── mod.rs
-│   │   ├── scanner.rs       ← ファイル走査
-│   │   ├── watcher.rs       ← ファイル監視
-│   │   └── chunker.rs       ← チャンク分割
+│   │   ├── mod.rs                  ← Document, IndexStatus, Indexerトレイト, IndexError
+│   │   └── chunker.rs              ← split_into_chunks()（オーバーラップ付き分割）
 │   ├── search/
-│   │   ├── mod.rs
-│   │   ├── fulltext.rs      ← 全文検索トレイト
-│   │   ├── vector.rs        ← ベクトル検索トレイト
-│   │   └── hybrid.rs        ← ハイブリッド検索（RRF）
+│   │   ├── mod.rs                  ← SearchResult, FulltextSearcherトレイト, SearchError
+│   │   └── hybrid.rs               ← HybridSearchResult, reciprocal_rank_fusion()
 │   ├── embedding/
-│   │   ├── mod.rs
-│   │   └── generator.rs     ← embedding生成トレイト
+│   │   └── mod.rs                  ← Embedding型, EmbeddingGeneratorトレイト,
+│   │                                 VectorSearcherトレイト, VectorSearchResult
 │   └── llm/
-│       ├── mod.rs
-│       ├── inference.rs      ← LLM推論トレイト
-│       ├── model_manager.rs  ← モデル管理
-│       └── rag.rs            ← RAGパイプライン
-├── infra/
-│   ├── mod.rs
-│   ├── fs/
-│   │   └── mod.rs            ← ファイルシステム操作
-│   ├── tantivy/
-│   │   ├── mod.rs
-│   │   ├── indexer.rs        ← tantivyインデックス実装
-│   │   └── searcher.rs       ← tantivy検索実装
-│   ├── onnx/
-│   │   └── mod.rs            ← ONNX Runtime実装
-│   └── llama/
-│       └── mod.rs            ← llama.cppバインディング実装
-└── config/
+│       ├── mod.rs                  ← LlmInferenceトレイト, LlmModelInfo, available_models()
+│       └── rag.rs                  ← ContextChunk, RagAnswer, build_rag_prompt(),
+│                                     extract_sources()
+└── infra/
     ├── mod.rs
-    └── settings.rs           ← アプリ設定
+    ├── tantivy/
+    │   └── mod.rs                  ← TantivySearchEngine（FulltextSearcher + Indexer実装）
+    │                                 tantivy + lindera(IPAdic) による日本語全文検索
+    ├── onnx/
+    │   └── mod.rs                  ← OnnxEmbeddingGenerator（EmbeddingGenerator実装）
+    │                                 ONNX Runtime + tokenizers による embedding生成
+    ├── hnsw/
+    │   └── mod.rs                  ← HnswVectorIndex（VectorSearcher実装）
+    │                                 hnsw_rs + anndists(DistCosine) によるベクトル検索
+    ├── llama/
+    │   └── mod.rs                  ← LlamaEngine（LlmInference実装）
+    │                                 llama-cpp-2 による GGUF モデル推論
+    └── model/
+        └── mod.rs                  ← モデルDL管理（download_file_with_progress,
+                                      download_embedding_model, is_model_downloaded）
 ```
 
-## 4. データフロー
+## 4. Tauri IPCコマンド一覧
 
-### 4.1 インデックス構築フロー
+| コマンド | 引数 | 戻り値 | 説明 |
+|---|---|---|---|
+| `build_index` | folder_path, index_path | u64 | 全文検索インデックス構築 |
+| `search` | query, limit | Vec\<SearchResult\> | 全文検索実行 |
+| `hybrid_search` | query, limit | Vec\<HybridSearchResult\> | ハイブリッド検索実行 |
+| `get_index_status` | — | IndexStatus | インデックス状態取得 |
+| `read_file_content` | path | String | ファイル内容読み取り |
+| `is_embedding_model_ready` | — | bool | embeddingモデルの準備状態 |
+| `download_embedding_model` | — | () | embeddingモデルDL（イベント通知付き） |
+| `build_vector_index` | — | u64 | ベクトルインデックス構築（イベント通知付き） |
+| `list_available_models` | — | Vec\<LlmModelInfo\> | 利用可能LLMモデル一覧 |
+| `download_llm_model` | filename, url | () | LLMモデルDL（イベント通知付き） |
+| `load_llm_model` | filename | () | LLMモデルロード |
+| `is_llm_ready` | — | bool | LLMの準備状態 |
+| `chat` | question | RagAnswer | RAG質問応答（ストリーミング） |
 
-```
-フォルダ登録
-  → ファイル走査（scanner）
-  → 各ファイルの内容読み取り
-  → lindera で日本語トークン化
-  → tantivy インデックスに追加
-  → （Phase 3）チャンク分割 → embedding生成 → HNSWインデックスに追加
-```
+### Tauri イベント一覧
 
-### 4.2 インデックス更新フロー
-
-```
-ファイル監視（watcher）がイベント検知
-  → 変更種別の判定（作成 / 更新 / 削除）
-  → 該当ファイルのインデックスを差分更新
-  → フロントエンドにイベント通知（Tauri event）
-```
-
-### 4.3 検索フロー
-
-```
-フロントエンド: SearchBar → invoke("search", { query })
-  → Rust: commands::search::search()
-  → domain::search::hybrid::search()
-  → 結果をシリアライズして返却
-  → フロントエンド: ResultList に表示
-```
-
-### 4.4 RAGフロー
-
-```
-フロントエンド: ChatInput → invoke("chat", { question })
-  → Rust: commands::chat::chat()
-  → domain::search::hybrid::search() で関連チャンク取得
-  → domain::llm::rag::generate() でプロンプト構築 + 推論
-  → Tauri event でストリーミング送信
-  → フロントエンド: ChatMessage にストリーミング表示
-```
-
-## 5. 技術選定の詳細
-
-### 5.1 全文検索: tantivy
-
-- Rust製の全文検索エンジン。Apache Lucene相当の機能を提供する
-- BM25スコアリング、フレーズ検索、ファセット検索をサポートする
-- lindera tokenizer でIPAdic辞書を用いた日本語形態素解析に対応する
-
-### 5.2 ベクトル検索: ONNX Runtime + HNSW
-
-- ONNX Runtimeでsentence-transformersモデル（多言語対応）を実行する
-- embedding候補: `intfloat/multilingual-e5-small`（384次元、約100MB）
-- HNSWアルゴリズムでベクトル近似最近傍検索を行う
-- Rustクレート: `ort`（ONNX Runtime）、`hnsw`（近傍探索）
-
-### 5.3 ローカルLLM: llama.cpp
-
-- llama.cppのRustバインディング（`llama-cpp-rs` / `llama-cpp-2`）を使用する
-- GGUF形式のモデルをサポートする
-- GPU VRAMに応じたモデルサイズの推奨と切り替え機能を提供する
-- モデルはHuggingFace Hubから動的にダウンロードする
-
-### 5.4 ハイブリッド検索: RRF
-
-- Reciprocal Rank Fusion でBM25スコアとベクトル類似度のランキングを統合する
-- 計算式: `RRF_score = Σ 1 / (k + rank_i)` （k=60が一般的）
-- 全文検索とベクトル検索の長所を組み合わせ、検索精度を向上させる
-
-## 6. 永続化
-
-### 6.1 インデックスデータ
-
-| データ | 保存形式 | 保存場所 |
+| イベント名 | ペイロード | 発生元 |
 |---|---|---|
-| 全文検索インデックス | tantivy独自形式 | `{app_data}/index/fulltext/` |
-| ベクトルインデックス | HNSWバイナリ | `{app_data}/index/vector/` |
-| ファイルメタデータ | SQLite | `{app_data}/metadata.db` |
+| `download-progress` | DownloadProgress | モデルDL中 |
+| `vector-index-progress` | {current, total} | ベクトルインデックス構築中 |
+| `chat-token` | String（トークン文字列） | LLM推論中 |
 
-### 6.2 アプリ設定
+## 5. AppState（アプリケーション状態）
 
-| データ | 保存形式 | 保存場所 |
+```rust
+pub struct AppState {
+    pub engine: Mutex<Option<TantivySearchEngine>>,         // 全文検索エンジン
+    pub vector_index: Mutex<Option<HnswVectorIndex>>,       // ベクトルインデックス
+    pub embedding_model: Mutex<Option<OnnxEmbeddingGenerator>>, // embedding生成モデル
+    pub llm_engine: Mutex<Option<LlamaEngine>>,             // LLM推論エンジン
+    pub model_dir: PathBuf,                                 // モデル保存ディレクトリ
+    pub folder_path: Mutex<Option<String>>,                 // 選択中のフォルダパス
+}
+```
+
+## 6. 技術選定の詳細（確定版）
+
+### 6.1 全文検索: tantivy 0.25 + lindera 2
+
+- tantivy: Rust製全文検索エンジン。BM25スコアリング、スニペット生成
+- lindera: IPAdic辞書による日本語形態素解析
+- lindera-tantivy: linderaをtantivyトークナイザとして統合するアダプタ
+- スキーマ: path(STRING|STORED), title(TEXT|STORED), body(TEXT|STORED)
+- 全フィールドで`lang_ja`トークナイザを使用
+
+### 6.2 ベクトル検索
+
+- **embeddingモデル**: `intfloat/multilingual-e5-small`（384次元、ONNX形式、約470MB）
+  - 94言語以上対応（日本語含む）
+  - E5プレフィックス方式: クエリには`"query: "`、文書には`"passage: "`を付与
+- **推論エンジン**: ort 2.0.0-rc.12（ONNX Runtime for Rust）
+  - CPU推論（デフォルト）。GPU対応はfeature flagで追加可能
+- **トークナイザ**: tokenizers 0.22（HuggingFace公式、tokenizer.jsonを使用）
+- **ベクトルインデックス**: hnsw_rs 0.3 + anndists 0.1
+  - HNSW（Hierarchical Navigable Small World）アルゴリズム
+  - コサイン距離（DistCosine）
+  - パラメータ: max_nb_connection=16, ef_construction=200, ef_search=200
+- **チャンク分割**: 500文字、100文字オーバーラップ
+- **スコア統合**: RRF（Reciprocal Rank Fusion、k=60）
+
+### 6.3 ローカルLLM: llama-cpp-2 0.1.140
+
+- llama.cppのRustバインディング（C++ソースを自動コンパイル）
+- GGUF形式モデルをサポート
+- ストリーミング推論（トークン単位でコールバック）
+- サンプリング: temperature=0.7
+- コンテキスト長: 2048トークン
+- 最大生成トークン数: 512
+
+### 6.4 利用可能なLLMモデル（プリセット）
+
+| モデル | サイズ | 推奨VRAM | 用途 |
+|---|---|---|---|
+| Qwen2.5-0.5B-Instruct Q4_K_M | 491MB | CPU可 | テスト・軽量用途 |
+| Qwen2.5-1.5B-Instruct Q4_K_M | 1.12GB | 2GB+ | 日常用途 |
+| Qwen2.5-7B-Instruct Q4_K_M | 4.68GB | 6GB+ | 高品質 |
+| Qwen2.5-14B-Instruct Q4_K_M | 8.99GB | 12GB+ | 最高品質 |
+
+全モデルがQwen2.5ベースで日本語に対応する。HuggingFaceから動的ダウンロード。
+
+## 7. 永続化
+
+### 7.1 データ保存場所
+
+| データ | 保存場所 | 形式 |
 |---|---|---|
-| アプリ設定 | JSON | `{app_config}/settings.json` |
-| ダウンロード済みモデル | GGUF | `{app_data}/models/` |
+| 全文検索インデックス | `{app_data}/index/fulltext/` | tantivy独自形式 |
+| ベクトルインデックス | メモリ上（永続化未実装） | — |
+| embeddingモデル | `{model_dir}/model.onnx`, `tokenizer.json` | ONNX, JSON |
+| LLMモデル | `{model_dir}/*.gguf` | GGUF |
 
-`{app_data}` と `{app_config}` はTauri APIが提供するプラットフォーム別のパスを使用する。
+`{model_dir}` は実行ファイルと同階層の `models/` ディレクトリ。
+`{app_data}` はTauri APIが提供するプラットフォーム別パス。
+
+### 7.2 未実装の永続化（今後の課題）
+
+- ベクトルインデックスのディスク永続化（hnsw_rsのhnswioモジュール）
+- アプリ設定のJSON永続化
+- ファイルメタデータのSQLite管理
+
+## 8. テスト構成
+
+### 8.1 テスト総数: 46件
+
+| カテゴリ | ファイル | 件数 |
+|---|---|---|
+| tantivy全文検索 | `infra/tantivy/mod.rs` | 7 |
+| チャンク分割 | `domain/indexer/chunker.rs` | 5 |
+| RRFハイブリッド | `domain/search/hybrid.rs` | 5 |
+| HNSWベクトル検索 | `infra/hnsw/mod.rs` | 4 |
+| モデル管理 | `infra/model/mod.rs` | 2 |
+| RAGパイプライン | `domain/llm/rag.rs` | 5 |
+| Appコンポーネント | `src/App.test.tsx` | 1 |
+| Sidebar | `src/components/layout/Sidebar.test.tsx` | 2 |
+| MainPanel | `src/components/layout/MainPanel.test.tsx` | 2 |
+| SearchBar | `src/components/search/SearchBar.test.tsx` | 3 |
+| ResultList | `src/components/search/ResultList.test.tsx` | 4 |
+| Preview | `src/components/search/Preview.test.tsx` | 2 |
+| ChatMessage | `src/components/chat/ChatMessage.test.tsx` | 4 |
+
+### 8.2 E2Eテスト
+
+- **自動**: WebdriverIO v8 + tauri-driver（3件）
+  - アプリウィンドウ表示、サイドバー、メインパネル
+- **手動**: `docs/manual-e2e-tests.md`（3項目）
+  - MET-001: embeddingモデルDL
+  - MET-002: ベクトルインデックス構築
+  - MET-003: ハイブリッド検索
+
+## 9. 依存関係（Rust）
+
+### 9.1 主要クレート
+
+| クレート | バージョン | 用途 |
+|---|---|---|
+| tauri | 2 | アプリケーションフレームワーク |
+| tauri-plugin-dialog | 2 | フォルダ選択ダイアログ |
+| tauri-plugin-fs | 2 | ファイルシステムアクセス |
+| tantivy | 0.25 | 全文検索エンジン |
+| lindera | 2 (embed-ipadic) | 日本語形態素解析 |
+| lindera-tantivy | 2 (embed-ipadic) | lindera-tantivy統合 |
+| ort | 2.0.0-rc.12 | ONNX Runtime推論 |
+| ndarray | 0.17 | テンソル操作 |
+| hnsw_rs | 0.3 | HNSWベクトルインデックス |
+| anndists | 0.1 | 距離関数（コサイン距離） |
+| tokenizers | 0.22 | HuggingFaceトークナイザ |
+| llama-cpp-2 | 0.1.140 | llama.cpp Rustバインディング |
+| walkdir | 2 | ファイル走査 |
+| reqwest | 0.13 (stream) | HTTPダウンロード |
+| serde | 1 (derive) | シリアライズ |
+| thiserror | 2 | エラー型定義 |
+
+### 9.2 ビルド依存
+
+| ツール | 用途 |
+|---|---|
+| CMake | llama-cpp-2のC++コンパイル |
+| libclang-dev | llama-cpp-2のbindgen |
+| webkit2gtk-4.1-dev | Tauri WebView (Linux) |
+| webkit2gtk-driver | E2Eテスト (Linux) |
