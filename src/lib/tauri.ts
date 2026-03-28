@@ -1,15 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { SearchResult, IndexStatus } from "../types";
+import type { SearchResult, HybridSearchResult, IndexStatus } from "../types";
 
 export async function buildIndex(folderPath: string, indexPath: string): Promise<number> {
-  return invoke<number>("build_index", {
-    folderPath,
-    indexPath,
-  });
+  return invoke<number>("build_index", { folderPath, indexPath });
 }
 
 export async function search(query: string, limit: number = 20): Promise<SearchResult[]> {
   return invoke<SearchResult[]>("search", { query, limit });
+}
+
+export async function hybridSearch(
+  query: string,
+  limit: number = 20,
+): Promise<HybridSearchResult[]> {
+  return invoke<HybridSearchResult[]>("hybrid_search", { query, limit });
 }
 
 export async function getIndexStatus(): Promise<IndexStatus> {
@@ -18,4 +22,16 @@ export async function getIndexStatus(): Promise<IndexStatus> {
 
 export async function readFileContent(path: string): Promise<string> {
   return invoke<string>("read_file_content", { path });
+}
+
+export async function isEmbeddingModelReady(): Promise<boolean> {
+  return invoke<boolean>("is_embedding_model_ready");
+}
+
+export async function downloadEmbeddingModel(): Promise<void> {
+  return invoke<void>("download_embedding_model");
+}
+
+export async function buildVectorIndex(): Promise<number> {
+  return invoke<number>("build_vector_index");
 }

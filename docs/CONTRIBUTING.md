@@ -69,6 +69,25 @@
 - パフォーマンスの主観的評価
 - 外部アプリ連携（ファイルを外部エディタで開く等）
 
+#### MLモデルのキャッシュ方針
+
+ベクトル検索機能はembeddingモデル（`intfloat/multilingual-e5-small`、約470MB）を必要とする。
+
+**E2Eテスト時:**
+- 初回実行時にHuggingFaceからモデルを自動ダウンロードする
+- ダウンロード済みのモデルはローカルにキャッシュされ、2回目以降は再利用する
+- キャッシュ場所: `{app_data}/models/`（開発時は `src-tauri/target/debug/models/` 付近）
+
+**CI環境:**
+- CIのキャッシュ機構（GitHub Actions の `actions/cache` 等）を使い、モデルファイルをキャッシュする
+- キャッシュキー例: `embedding-model-multilingual-e5-small-v1`
+- キャッシュ対象: `model.onnx` と `tokenizer.json`
+- キャッシュミス時は初回ダウンロードが発生する（CI実行時間が数分延びる）
+
+**ローカル開発時:**
+- 一度ダウンロードしたモデルは `models/` ディレクトリにキャッシュされる
+- `models/` ディレクトリは `.gitignore` に含まれる（リポジトリにコミットしない）
+
 ## 2. コーディング規約
 
 ### 2.1 フロントエンド（TypeScript / React）

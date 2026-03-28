@@ -13,6 +13,9 @@ Thumbs.db
 .vscode/
 .idea/
 
+# ML models (downloaded at runtime)
+models/
+
 # Environment
 .env
 .env.local

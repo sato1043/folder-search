@@ -1,17 +1,28 @@
+use std::path::PathBuf;
 use std::sync::Mutex;
 
-use tauri::State;
+use tauri::{Emitter, State};
 
+use crate::domain::embedding::{EmbeddingGenerator, VectorSearcher};
+use crate::domain::indexer::chunker::split_into_chunks;
 use crate::domain::indexer::{Indexer, IndexStatus};
+use crate::domain::search::hybrid::{reciprocal_rank_fusion, HybridSearchResult};
 use crate::domain::search::{FulltextSearcher, SearchResult};
+use crate::infra::hnsw::HnswVectorIndex;
+use crate::infra::model;
+use crate::infra::onnx::OnnxEmbeddingGenerator;
 use crate::infra::tantivy::TantivySearchEngine;
 
-/// アプリの状態として検索エンジンを保持する
+/// アプリの状態
 pub struct AppState {
     pub engine: Mutex<Option<TantivySearchEngine>>,
+    pub vector_index: Mutex<Option<HnswVectorIndex>>,
+    pub embedding_model: Mutex<Option<OnnxEmbeddingGenerator>>,
+    pub model_dir: PathBuf,
+    pub folder_path: Mutex<Option<String>>,
 }
 
-/// フォルダを選択してインデックスを構築する
+/// 全文検索インデックスを構築する
 #[tauri::command]
 pub fn build_index(
     folder_path: String,
@@ -28,12 +39,19 @@ pub fn build_index(
     let mut guard = state.engine.lock().map_err(|e| e.to_string())?;
     *guard = Some(engine);
 
+    let mut fp = state.folder_path.lock().map_err(|e| e.to_string())?;
+    *fp = Some(folder_path);
+
     Ok(count)
 }
 
-/// 検索を実行する
+/// 全文検索を実行する
 #[tauri::command]
-pub fn search(query: String, limit: usize, state: State<'_, AppState>) -> Result<Vec<SearchResult>, String> {
+pub fn search(
+    query: String,
+    limit: usize,
+    state: State<'_, AppState>,
+) -> Result<Vec<SearchResult>, String> {
     let guard = state.engine.lock().map_err(|e| e.to_string())?;
     let engine = guard
         .as_ref()
@@ -57,4 +75,191 @@ pub fn get_index_status(state: State<'_, AppState>) -> Result<IndexStatus, Strin
 #[tauri::command]
 pub fn read_file_content(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("ファイル読み込み失敗: {}", e))
+}
+
+/// embeddingモデルがダウンロード済みかどうか
+#[tauri::command]
+pub fn is_embedding_model_ready(state: State<'_, AppState>) -> bool {
+    model::is_model_downloaded(&state.model_dir)
+}
+
+/// embeddingモデルをダウンロードする
+#[tauri::command]
+pub async fn download_embedding_model(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let model_dir = state.model_dir.clone();
+
+    model::download_embedding_model(&model_dir, |progress| {
+        let _ = app.emit("download-progress", progress);
+    })
+    .await?;
+
+    // モデルをロードする
+    let files = model::model_files(&model_dir);
+    let generator = OnnxEmbeddingGenerator::new(
+        files.model_path.to_str().unwrap_or(""),
+        files.tokenizer_path.to_str().unwrap_or(""),
+    )
+    .map_err(|e| format!("モデル読み込み失敗: {}", e))?;
+
+    let mut guard = state.embedding_model.lock().map_err(|e| e.to_string())?;
+    *guard = Some(generator);
+
+    Ok(())
+}
+
+/// ベクトルインデックスを構築する
+#[tauri::command]
+pub fn build_vector_index(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<u64, String> {
+    let folder_path = {
+        let guard = state.folder_path.lock().map_err(|e| e.to_string())?;
+        guard
+            .clone()
+            .ok_or_else(|| "フォルダが選択されていない".to_string())?
+    };
+
+    let mut model_guard = state.embedding_model.lock().map_err(|e| e.to_string())?;
+    let generator = model_guard
+        .as_mut()
+        .ok_or_else(|| "embeddingモデルがロードされていない".to_string())?;
+
+    // ファイル走査・チャンク分割
+    let mut all_chunks = Vec::new();
+    for entry in walkdir::WalkDir::new(&folder_path)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if ext != "txt" && ext != "md" {
+            continue;
+        }
+        let body = match std::fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(_) => continue,
+        };
+        let chunks = split_into_chunks(
+            &path.to_string_lossy(),
+            &body,
+            500,  // チャンクサイズ: 500文字
+            100,  // オーバーラップ: 100文字
+        );
+        all_chunks.extend(chunks);
+    }
+
+    let total = all_chunks.len() as u64;
+
+    // embedding生成 + HNSWインデックス構築
+    let mut vector_index = HnswVectorIndex::new();
+
+    for (i, chunk) in all_chunks.iter().enumerate() {
+        let text_with_prefix = format!("passage: {}", chunk.text);
+        let embedding = generator
+            .generate(&text_with_prefix)
+            .map_err(|e| format!("embedding生成失敗: {}", e))?;
+        vector_index.add(chunk, &embedding);
+
+        if i % 50 == 0 {
+            let _ = app.emit(
+                "vector-index-progress",
+                serde_json::json!({
+                    "current": i + 1,
+                    "total": total,
+                }),
+            );
+        }
+    }
+
+    let mut guard = state.vector_index.lock().map_err(|e| e.to_string())?;
+    *guard = Some(vector_index);
+
+    Ok(total)
+}
+
+/// ハイブリッド検索を実行する
+#[tauri::command]
+pub fn hybrid_search(
+    query: String,
+    limit: usize,
+    state: State<'_, AppState>,
+) -> Result<Vec<HybridSearchResult>, String> {
+    // 全文検索
+    let fulltext_results = {
+        let guard = state.engine.lock().map_err(|e| e.to_string())?;
+        match guard.as_ref() {
+            Some(engine) => engine.search(&query, limit).unwrap_or_default(),
+            None => Vec::new(),
+        }
+    };
+
+    // ベクトル検索
+    let vector_results = {
+        let mut model_guard = state.embedding_model.lock().map_err(|e| e.to_string())?;
+        let vi_guard = state.vector_index.lock().map_err(|e| e.to_string())?;
+
+        match (model_guard.as_mut(), vi_guard.as_ref()) {
+            (Some(generator), Some(index)) => {
+                let query_with_prefix = format!("query: {}", query);
+                let query_embedding = generator
+                    .generate(&query_with_prefix)
+                    .map_err(|e| format!("クエリembedding生成失敗: {}", e))?;
+                index.search_nearest(&query_embedding, limit).unwrap_or_default()
+            }
+            _ => Vec::new(),
+        }
+    };
+
+    // RRFでスコア統合
+    let fulltext_paths: Vec<String> = fulltext_results.iter().map(|r| r.path.clone()).collect();
+    let vector_paths: Vec<String> = vector_results.iter().map(|r| r.source_path.clone()).collect();
+    let ranked = reciprocal_rank_fusion(&fulltext_paths, &vector_paths, 60.0);
+
+    // 結果を構築（snippetは全文検索結果を優先、なければベクトル検索のチャンクテキスト）
+    let results: Vec<HybridSearchResult> = ranked
+        .into_iter()
+        .take(limit)
+        .map(|(path, score)| {
+            let ft = fulltext_results.iter().find(|r| r.path == path);
+            let vr = vector_results.iter().find(|r| r.source_path == path);
+
+            let title = ft
+                .map(|r| r.title.clone())
+                .or_else(|| {
+                    std::path::Path::new(&path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_default();
+
+            let snippet = ft
+                .map(|r| r.snippet.clone())
+                .unwrap_or_else(|| vr.map(|r| r.text.clone()).unwrap_or_default());
+
+            let source = match (ft.is_some(), vr.is_some()) {
+                (true, true) => "hybrid",
+                (true, false) => "fulltext",
+                (false, true) => "vector",
+                _ => "unknown",
+            };
+
+            HybridSearchResult {
+                path,
+                title,
+                snippet,
+                score,
+                source: source.to_string(),
+            }
+        })
+        .collect();
+
+    Ok(results)
 }
