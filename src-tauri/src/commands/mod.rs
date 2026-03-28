@@ -6,9 +6,12 @@ use tauri::{Emitter, State};
 use crate::domain::embedding::{EmbeddingGenerator, VectorSearcher};
 use crate::domain::indexer::chunker::split_into_chunks;
 use crate::domain::indexer::{Indexer, IndexStatus};
+use crate::domain::llm::rag::{build_rag_prompt, extract_sources, ContextChunk, RagAnswer};
+use crate::domain::llm::{available_models, LlmInference, LlmModelInfo};
 use crate::domain::search::hybrid::{reciprocal_rank_fusion, HybridSearchResult};
 use crate::domain::search::{FulltextSearcher, SearchResult};
 use crate::infra::hnsw::HnswVectorIndex;
+use crate::infra::llama::LlamaEngine;
 use crate::infra::model;
 use crate::infra::onnx::OnnxEmbeddingGenerator;
 use crate::infra::tantivy::TantivySearchEngine;
@@ -18,6 +21,7 @@ pub struct AppState {
     pub engine: Mutex<Option<TantivySearchEngine>>,
     pub vector_index: Mutex<Option<HnswVectorIndex>>,
     pub embedding_model: Mutex<Option<OnnxEmbeddingGenerator>>,
+    pub llm_engine: Mutex<Option<LlamaEngine>>,
     pub model_dir: PathBuf,
     pub folder_path: Mutex<Option<String>>,
 }
@@ -262,4 +266,147 @@ pub fn hybrid_search(
         .collect();
 
     Ok(results)
+}
+
+/// 利用可能なLLMモデル一覧を返す
+#[tauri::command]
+pub fn list_available_models() -> Vec<LlmModelInfo> {
+    available_models()
+}
+
+/// LLMモデルをダウンロードする
+#[tauri::command]
+pub async fn download_llm_model(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    filename: String,
+    url: String,
+) -> Result<(), String> {
+    let model_dir = state.model_dir.clone();
+    let dest = model_dir.join(&filename);
+
+    if dest.exists() {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(&model_dir)
+        .map_err(|e| format!("ディレクトリ作成失敗: {}", e))?;
+
+    model::download_file_with_progress(&url, &dest, |progress| {
+        let _ = app.emit("download-progress", progress);
+    })
+    .await?;
+
+    Ok(())
+}
+
+/// LLMモデルをロードする
+#[tauri::command]
+pub fn load_llm_model(
+    filename: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let model_path = state.model_dir.join(&filename);
+    if !model_path.exists() {
+        return Err(format!("モデルファイルが見つからない: {}", model_path.display()));
+    }
+
+    let engine = LlamaEngine::new(model_path.to_str().unwrap_or(""))
+        .map_err(|e| format!("モデルロード失敗: {}", e))?;
+
+    let mut guard = state.llm_engine.lock().map_err(|e| e.to_string())?;
+    *guard = Some(engine);
+
+    Ok(())
+}
+
+/// LLMがロード済みかどうか
+#[tauri::command]
+pub fn is_llm_ready(state: State<'_, AppState>) -> bool {
+    state
+        .llm_engine
+        .lock()
+        .map(|g| g.is_some())
+        .unwrap_or(false)
+}
+
+/// RAG質問応答（ストリーミング）
+#[tauri::command]
+pub fn chat(
+    app: tauri::AppHandle,
+    question: String,
+    state: State<'_, AppState>,
+) -> Result<RagAnswer, String> {
+    // ハイブリッド検索でコンテキストを取得
+    let context_chunks = {
+        // 全文検索
+        let fulltext_results = {
+            let guard = state.engine.lock().map_err(|e| e.to_string())?;
+            match guard.as_ref() {
+                Some(engine) => engine.search(&question, 5).unwrap_or_default(),
+                None => Vec::new(),
+            }
+        };
+
+        // ベクトル検索
+        let vector_results = {
+            let mut model_guard = state.embedding_model.lock().map_err(|e| e.to_string())?;
+            let vi_guard = state.vector_index.lock().map_err(|e| e.to_string())?;
+
+            match (model_guard.as_mut(), vi_guard.as_ref()) {
+                (Some(generator), Some(index)) => {
+                    let query_with_prefix = format!("query: {}", question);
+                    let query_embedding = generator
+                        .generate(&query_with_prefix)
+                        .map_err(|e| format!("embedding生成失敗: {}", e))?;
+                    index.search_nearest(&query_embedding, 5).unwrap_or_default()
+                }
+                _ => Vec::new(),
+            }
+        };
+
+        // RRFで統合してトップ5のファイルを取得
+        let fulltext_paths: Vec<String> = fulltext_results.iter().map(|r| r.path.clone()).collect();
+        let vector_paths: Vec<String> =
+            vector_results.iter().map(|r| r.source_path.clone()).collect();
+        let ranked = reciprocal_rank_fusion(&fulltext_paths, &vector_paths, 60.0);
+
+        // コンテキストチャンクを構築
+        let mut chunks = Vec::new();
+        for (path, _) in ranked.iter().take(5) {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                // ファイル内容を最大1000文字に切り詰め
+                let text: String = content.chars().take(1000).collect();
+                chunks.push(ContextChunk {
+                    path: path.clone(),
+                    text,
+                });
+            }
+        }
+        chunks
+    };
+
+    // RAGプロンプトを構築
+    let prompt = build_rag_prompt(&question, &context_chunks);
+    let source_paths: Vec<String> = context_chunks.iter().map(|c| c.path.clone()).collect();
+
+    // LLM推論
+    let mut llm_guard = state.llm_engine.lock().map_err(|e| e.to_string())?;
+    let engine = llm_guard
+        .as_mut()
+        .ok_or_else(|| "LLMモデルがロードされていない".to_string())?;
+
+    let answer = engine
+        .generate(&prompt, 512, |token| {
+            let _ = app.emit("chat-token", token);
+        })
+        .map_err(|e| format!("LLM推論失敗: {}", e))?;
+
+    // 回答から参照元を抽出（LLMが参照元を明示した場合）
+    let mut sources = extract_sources(&answer);
+    if sources.is_empty() {
+        sources = source_paths;
+    }
+
+    Ok(RagAnswer { answer, sources })
 }

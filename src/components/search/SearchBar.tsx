@@ -3,9 +3,10 @@ import { useState } from "react";
 type SearchBarProps = {
   onSearch: (query: string) => void;
   disabled?: boolean;
+  placeholder?: string;
 };
 
-export function SearchBar({ onSearch, disabled }: SearchBarProps) {
+export function SearchBar({ onSearch, disabled, placeholder = "検索..." }: SearchBarProps) {
   const [query, setQuery] = useState("");
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -18,7 +19,7 @@ export function SearchBar({ onSearch, disabled }: SearchBarProps) {
     <div className="search-bar">
       <input
         type="text"
-        placeholder="検索..."
+        placeholder={placeholder}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={handleKeyDown}

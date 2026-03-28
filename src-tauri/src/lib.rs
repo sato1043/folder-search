@@ -14,6 +14,7 @@ pub fn run() {
             engine: Mutex::new(None),
             vector_index: Mutex::new(None),
             embedding_model: Mutex::new(None),
+            llm_engine: Mutex::new(None),
             model_dir: tauri::utils::platform::current_exe()
                 .ok()
                 .and_then(|p| p.parent().map(|d| d.join("models")))
@@ -29,6 +30,11 @@ pub fn run() {
             commands::download_embedding_model,
             commands::build_vector_index,
             commands::hybrid_search,
+            commands::list_available_models,
+            commands::download_llm_model,
+            commands::load_llm_model,
+            commands::is_llm_ready,
+            commands::chat,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

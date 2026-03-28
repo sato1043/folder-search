@@ -39,7 +39,7 @@ pub fn is_model_downloaded(model_dir: &Path) -> bool {
 }
 
 /// ファイルをダウンロードする（進捗コールバック付き）
-async fn download_file<F>(url: &str, dest: &Path, mut on_progress: F) -> Result<(), String>
+pub async fn download_file_with_progress<F>(url: &str, dest: &Path, mut on_progress: F) -> Result<(), String>
 where
     F: FnMut(DownloadProgress),
 {
@@ -103,12 +103,12 @@ where
 
     // tokenizer.jsonのダウンロード（小さいので先に）
     if !files.tokenizer_path.exists() {
-        download_file(TOKENIZER_URL, &files.tokenizer_path, &mut on_progress).await?;
+        download_file_with_progress(TOKENIZER_URL, &files.tokenizer_path, &mut on_progress).await?;
     }
 
     // model.onnxのダウンロード
     if !files.model_path.exists() {
-        download_file(MODEL_URL, &files.model_path, &mut on_progress).await?;
+        download_file_with_progress(MODEL_URL, &files.model_path, &mut on_progress).await?;
     }
 
     Ok(files)

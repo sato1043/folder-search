@@ -38,3 +38,20 @@ export type VectorIndexProgress = {
 
 /** 検索モード */
 export type SearchMode = "fulltext" | "hybrid";
+
+/** LLMモデル情報 */
+export type LlmModelInfo = {
+  name: string;
+  filename: string;
+  url: string;
+  size_bytes: number;
+  min_vram_mb: number;
+  params: string;
+  quantization: string;
+};
+
+/** RAG回答結果 */
+export type RagAnswer = {
+  answer: string;
+  sources: string[];
+};
