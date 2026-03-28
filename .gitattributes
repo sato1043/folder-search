@@ -1,0 +1,9 @@
+# Cross-platform line ending normalization
+* text=auto eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.ico binary
+*.gguf binary
+*.onnx binary
