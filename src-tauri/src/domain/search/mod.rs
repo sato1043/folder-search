@@ -1,3 +1,5 @@
+pub mod hybrid;
+
 use serde::Serialize;
 
 /// 検索結果の1件を表す

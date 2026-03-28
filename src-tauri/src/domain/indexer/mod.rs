@@ -1,3 +1,5 @@
+pub mod chunker;
+
 use serde::Serialize;
 
 /// インデックスの状態を表す
