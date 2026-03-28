@@ -5,6 +5,12 @@
 フォーマットは [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に準拠する。
 バージョニングは [Semantic Versioning](https://semver.org/lang/ja/) に従う。
 
+## [Unreleased]
+
+### Fixed
+
+- アプリ起動時にダウンロード済みembeddingモデルを自動ロードするよう修正（setupフック追加）
+
 ## [0.1.0] - 2026-03-28
 
 ### Added

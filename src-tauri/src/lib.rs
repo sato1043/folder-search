@@ -3,7 +3,10 @@ pub mod domain;
 pub mod infra;
 
 use commands::AppState;
+use infra::model;
+use infra::onnx::OnnxEmbeddingGenerator;
 use std::sync::Mutex;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -20,6 +23,28 @@ pub fn run() {
                 .and_then(|p| p.parent().map(|d| d.join("models")))
                 .unwrap_or_else(|| std::path::PathBuf::from("./models")),
             folder_path: Mutex::new(None),
+        })
+        .setup(|app| {
+            let state = app.state::<AppState>();
+            let model_dir = &state.model_dir;
+
+            if model::is_model_downloaded(model_dir) {
+                let files = model::model_files(model_dir);
+                match OnnxEmbeddingGenerator::new(
+                    files.model_path.to_str().unwrap_or(""),
+                    files.tokenizer_path.to_str().unwrap_or(""),
+                ) {
+                    Ok(generator) => {
+                        let mut guard = state.embedding_model.lock().unwrap();
+                        *guard = Some(generator);
+                    }
+                    Err(e) => {
+                        eprintln!("embeddingモデルの自動ロード失敗: {}", e);
+                    }
+                }
+            }
+
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::build_index,

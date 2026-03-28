@@ -188,6 +188,7 @@ src/
 src-tauri/src/
 ├── main.rs                         ← エントリポイント
 ├── lib.rs                          ← Tauriアプリ設定、AppState初期化、コマンド登録
+│                                     setupフック: ダウンロード済みembeddingモデルの自動ロード
 ├── commands/
 │   └── mod.rs                      ← 全Tauriコマンド（13コマンド）
 │                                     AppState構造体定義
