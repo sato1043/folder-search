@@ -19,6 +19,13 @@ tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+tantivy = "0.25"
+lindera = { version = "2", features = ["embed-ipadic"] }
+lindera-tantivy = { version = "2", features = ["embed-ipadic"] }
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"
 
 [profile.release]
 panic = "abort"
