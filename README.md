@@ -75,7 +75,10 @@ pnpm tauri build        # リリースビルド
 # テスト
 pnpm test               # フロントエンドユニットテスト（Vitest）
 cargo test --manifest-path src-tauri/Cargo.toml  # Rustユニットテスト
-pnpm test:e2e           # E2Eテスト（WebdriverIO）
+
+# E2Eテスト
+pnpm tauri build --debug  # E2Eテスト用デバッグビルド（初回・コード変更時に必要）
+pnpm test:e2e             # E2Eテスト（WebdriverIO、要デバッグビルド）
 
 # コード品質
 pnpm lint               # ESLint
@@ -140,6 +143,7 @@ Tauri v2の2層構成（WebView + Rustネイティブレイヤー）を採用し
 - [機能一覧・TODO](docs/features.md)
 - [コントリビューションガイド](docs/CONTRIBUTING.md)
 - [手動E2Eテスト項目](docs/manual-e2e-tests.md)
+- [リリース手順](docs/RELEASING.md)
 
 ## ライセンス
 

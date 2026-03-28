@@ -33,7 +33,7 @@
 |---|---|---|---|
 | フロントエンド ユニットテスト | Vitest | React コンポーネント、hooks、ユーティリティ | `pnpm test` |
 | Rust ユニットテスト | cargo test | ドメインロジック、インフラ実装 | `cargo test --manifest-path src-tauri/Cargo.toml` |
-| E2Eテスト（自動） | Playwright / WebdriverIO | アプリ全体の統合テスト | `pnpm test:e2e` |
+| E2Eテスト（自動） | WebdriverIO | アプリ全体の統合テスト | `pnpm tauri build --debug && pnpm test:e2e` |
 | E2Eテスト（手動） | — | 自動化困難なテスト | `docs/manual-e2e-tests.md` 参照 |
 
 ### 1.2 E2Eテスト方針
@@ -185,3 +185,4 @@ PRを作成する前に以下を確認する:
 - [ ] E2Eテストを検討した（自動化 or 手動テスト項目に追記）
 - [ ] 必要に応じてドキュメントを更新した
 - [ ] CHANGELOG.md にユーザー向けの変更内容を記載した
+- [ ] バージョン番号を変更していない（バージョン更新はリリース時のみ。docs/RELEASING.md 参照）

@@ -69,6 +69,7 @@ cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 - E2Eテストを必ず検討する（自動化不可の場合は手動テスト項目に追記）
 - コミット前にlint・フォーマット・テストを実行する
 - MLモデル（ONNX, GGUF）はリポジトリにコミットしない（実行時にダウンロード）
+- バージョン番号（package.json, Cargo.toml, tauri.conf.json）はリリース時にのみ更新する。通常の開発中は変更しない。手順は docs/RELEASING.md を参照
 
 ### フロントエンド（TypeScript / React）
 
