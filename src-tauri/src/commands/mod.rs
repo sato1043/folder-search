@@ -164,6 +164,8 @@ pub fn build_vector_index(
     // embedding生成 + HNSWインデックス構築
     let mut vector_index = HnswVectorIndex::new();
 
+    let progress_interval = std::cmp::max(total as usize / 100, 1);
+
     for (i, chunk) in all_chunks.iter().enumerate() {
         let text_with_prefix = format!("passage: {}", chunk.text);
         let embedding = generator
@@ -171,7 +173,7 @@ pub fn build_vector_index(
             .map_err(|e| format!("embedding生成失敗: {}", e))?;
         vector_index.add(chunk, &embedding);
 
-        if i % 50 == 0 {
+        if i % progress_interval == 0 {
             let _ = app.emit(
                 "vector-index-progress",
                 serde_json::json!({

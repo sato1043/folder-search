@@ -95,14 +95,20 @@ impl EmbeddingGenerator for OnnxEmbeddingGenerator {
         let mask_array = Array2::from_shape_vec((1, seq_len), attention_mask_i64)
             .map_err(|e| EmbeddingError::GenerationError(e.to_string()))?;
 
+        let token_type_ids = vec![0i64; seq_len];
+        let token_type_array = Array2::from_shape_vec((1, seq_len), token_type_ids)
+            .map_err(|e| EmbeddingError::GenerationError(e.to_string()))?;
+
         let ids_tensor = Tensor::from_array(ids_array)
             .map_err(|e| EmbeddingError::GenerationError(e.to_string()))?;
         let mask_tensor = Tensor::from_array(mask_array)
             .map_err(|e| EmbeddingError::GenerationError(e.to_string()))?;
+        let type_tensor = Tensor::from_array(token_type_array)
+            .map_err(|e| EmbeddingError::GenerationError(e.to_string()))?;
 
         let outputs = self
             .session
-            .run(ort::inputs![ids_tensor, mask_tensor])
+            .run(ort::inputs![ids_tensor, mask_tensor, type_tensor])
             .map_err(|e| EmbeddingError::GenerationError(e.to_string()))?;
 
         let (shape, data) = outputs[0]

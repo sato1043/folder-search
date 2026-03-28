@@ -96,7 +96,8 @@ function App() {
   useEffect(() => {
     const unlisten = listen<VectorIndexProgress>("vector-index-progress", (event) => {
       const p = event.payload;
-      setVectorProgress(`${p.current} / ${p.total} チャンク`);
+      const pct = p.total > 0 ? Math.round((p.current / p.total) * 100) : 0;
+      setVectorProgress(`${pct}%`);
     });
     return () => {
       unlisten.then((f) => f());
@@ -113,6 +114,23 @@ function App() {
     };
   }, []);
 
+  const triggerBuildVectorIndex = useCallback(async () => {
+    try {
+      setIsBuildingVector(true);
+      setError(null);
+      setVectorProgress("");
+      await new Promise((r) => requestAnimationFrame(r));
+      const count = await buildVectorIndex();
+      setVectorChunkCount(count);
+      setIsBuildingVector(false);
+      setVectorProgress("");
+    } catch (e) {
+      setError(String(e));
+      setIsBuildingVector(false);
+      setVectorProgress("");
+    }
+  }, []);
+
   const handleSelectFolder = useCallback(async () => {
     try {
       const selected = await open({ directory: true, multiple: false });
@@ -125,12 +143,16 @@ function App() {
         const count = await buildIndex(selected as string, indexPath);
         setIndexCount(count);
         setIsIndexing(false);
+
+        if (modelReady && count > 0) {
+          await triggerBuildVectorIndex();
+        }
       }
     } catch (e) {
       setError(String(e));
       setIsIndexing(false);
     }
-  }, []);
+  }, [modelReady, triggerBuildVectorIndex]);
 
   const handleDownloadEmbeddingModel = useCallback(async () => {
     try {
@@ -141,28 +163,16 @@ function App() {
       setModelReady(true);
       setIsDownloading(false);
       setDownloadStatus("");
+
+      if (indexCount > 0) {
+        await triggerBuildVectorIndex();
+      }
     } catch (e) {
       setError(String(e));
       setIsDownloading(false);
       setDownloadStatus("");
     }
-  }, []);
-
-  const handleBuildVectorIndex = useCallback(async () => {
-    try {
-      setIsBuildingVector(true);
-      setError(null);
-      setVectorProgress("準備中...");
-      const count = await buildVectorIndex();
-      setVectorChunkCount(count);
-      setIsBuildingVector(false);
-      setVectorProgress("");
-    } catch (e) {
-      setError(String(e));
-      setIsBuildingVector(false);
-      setVectorProgress("");
-    }
-  }, []);
+  }, [indexCount, triggerBuildVectorIndex]);
 
   const handleDownloadAndLoadLlm = useCallback(async () => {
     const model = llmModels.find((m) => m.filename === selectedModel);
@@ -249,28 +259,22 @@ function App() {
   return (
     <div className="app">
       <Sidebar>
-        <button onClick={handleSelectFolder} disabled={isIndexing}>
-          {isIndexing ? "インデックス構築中..." : "フォルダを選択"}
+        <button onClick={handleSelectFolder} disabled={isIndexing || isBuildingVector}>
+          フォルダを選択
         </button>
         {folderPath && <p className="folder-path">{folderPath}</p>}
         {indexCount > 0 && <p className="index-count">{indexCount} 件のファイル</p>}
 
         <hr className="sidebar-divider" />
 
-        {!modelReady && (
+        {!modelReady && indexCount > 0 && (
           <button onClick={handleDownloadEmbeddingModel} disabled={isDownloading}>
             {isDownloading ? "ダウンロード中..." : "Embeddingモデル取得"}
           </button>
         )}
-        {modelReady && <p className="status-ok">Embeddingモデル: 準備完了</p>}
 
-        {modelReady && indexCount > 0 && (
-          <button onClick={handleBuildVectorIndex} disabled={isBuildingVector}>
-            {isBuildingVector ? "構築中..." : "ベクトルインデックス構築"}
-          </button>
-        )}
-        {isBuildingVector && <p className="progress-text">{vectorProgress}</p>}
-        {vectorChunkCount > 0 && <p className="status-ok">{vectorChunkCount} チャンク登録済み</p>}
+        {isBuildingVector && <p className="status-ok">ベクトルインデックス: 構築中{vectorProgress && ` ${vectorProgress}`}</p>}
+        {!isBuildingVector && vectorChunkCount > 0 && <p className="status-ok">ベクトルインデックス: {vectorChunkCount} チャンク登録済み</p>}
 
         <hr className="sidebar-divider" />
 
