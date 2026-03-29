@@ -33,6 +33,8 @@ tokio = { version = "1", features = ["fs", "io-util"] }
 futures-util = "0.3"
 llama-cpp-2 = { version = "0.1.140", default-features = false }
 encoding_rs = "0.8"
+bincode = "1"
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"

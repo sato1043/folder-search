@@ -1435,6 +1435,7 @@ name = "folder-search"
 version = "0.1.0"
 dependencies = [
  "anndists",
+ "bincode",
  "encoding_rs",
  "futures-util",
  "hnsw_rs",
@@ -1446,6 +1447,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "tantivy",
  "tauri",
  "tauri-build",

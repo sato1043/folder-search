@@ -15,6 +15,9 @@ use crate::infra::llama::LlamaEngine;
 use crate::infra::model;
 use crate::infra::onnx::OnnxEmbeddingGenerator;
 use crate::infra::tantivy::TantivySearchEngine;
+use crate::infra::vector_cache::VectorCache;
+
+use tauri::Manager;
 
 /// アプリの状態
 pub struct AppState {
@@ -127,6 +130,31 @@ pub fn build_vector_index(
             .ok_or_else(|| "フォルダが選択されていない".to_string())?
     };
 
+    // キャッシュの準備
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir取得失敗: {}", e))?;
+    let cache = VectorCache::new(&app_data_dir);
+
+    // キャッシュが有効ならロードして返す
+    if cache.is_cache_valid(&folder_path) {
+        if let Ok(cached) = cache.load(&folder_path) {
+            let total = cached.metas.len() as u64;
+            let vector_index = HnswVectorIndex::from_cache(cached);
+
+            let _ = app.emit(
+                "vector-index-progress",
+                serde_json::json!({ "current": total, "total": total }),
+            );
+
+            let mut guard = state.vector_index.lock().map_err(|e| e.to_string())?;
+            *guard = Some(vector_index);
+            return Ok(total);
+        }
+    }
+
+    // キャッシュ無効 → フルビルド
     let mut model_guard = state.embedding_model.lock().map_err(|e| e.to_string())?;
     let generator = model_guard
         .as_mut()
@@ -163,6 +191,7 @@ pub fn build_vector_index(
 
     // embedding生成 + HNSWインデックス構築
     let mut vector_index = HnswVectorIndex::new();
+    let mut all_embeddings: Vec<Vec<f32>> = Vec::with_capacity(all_chunks.len());
 
     let progress_interval = std::cmp::max(total as usize / 100, 1);
 
@@ -172,6 +201,7 @@ pub fn build_vector_index(
             .generate(&text_with_prefix)
             .map_err(|e| format!("embedding生成失敗: {}", e))?;
         vector_index.add(chunk, &embedding);
+        all_embeddings.push(embedding);
 
         if i % progress_interval == 0 {
             let _ = app.emit(
@@ -182,6 +212,11 @@ pub fn build_vector_index(
                 }),
             );
         }
+    }
+
+    // キャッシュ保存（失敗しても続行）
+    if let Err(e) = cache.save(&folder_path, vector_index.metas(), &all_embeddings) {
+        eprintln!("ベクトルキャッシュ保存失敗（無視）: {}", e);
     }
 
     let mut guard = state.vector_index.lock().map_err(|e| e.to_string())?;

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::embedding::{Embedding, VectorSearchError, VectorSearchResult, VectorSearcher};
 use crate::domain::indexer::chunker::Chunk;
+use crate::infra::vector_cache::CachedEmbeddings;
 
 /// チャンクのメタデータ（ベクトルIDに紐づく）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +81,27 @@ impl HnswVectorIndex {
     /// インデックスが空かどうかを返す
     pub fn is_empty(&self) -> bool {
         self.metas.is_empty()
+    }
+
+    /// キャッシュされたembedding+メタデータからHNSWインデックスを再構築する
+    pub fn from_cache(cached: CachedEmbeddings) -> Self {
+        let mut index = Self::new();
+        index.metas = cached.metas;
+
+        let data: Vec<(&Vec<f32>, usize)> = cached
+            .embeddings
+            .iter()
+            .enumerate()
+            .map(|(i, emb)| (emb, i))
+            .collect();
+        index.hnsw.parallel_insert(&data);
+
+        index
+    }
+
+    /// メタデータへの参照を返す（キャッシュ保存用）
+    pub fn metas(&self) -> &[ChunkMeta] {
+        &self.metas
     }
 }
 
