@@ -161,8 +161,12 @@ function App() {
   }, []);
 
   const refreshModelStorage = useCallback(async () => {
-    listDownloadedModels().then(setDownloadedModels).catch(() => {});
-    getStorageUsage().then(setStorageUsage).catch(() => {});
+    const [models, usage] = await Promise.all([
+      listDownloadedModels(),
+      getStorageUsage(),
+    ]);
+    setDownloadedModels(models);
+    setStorageUsage(usage);
   }, []);
 
   const triggerBuildVectorIndex = useCallback(async () => {
