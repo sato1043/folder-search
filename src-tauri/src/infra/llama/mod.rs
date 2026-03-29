@@ -230,4 +230,101 @@ mod tests {
         // 24 → 12 → 6 → 3 → 1 → 0
         assert_eq!(sequence, vec![24, 12, 6, 3, 1, 0]);
     }
+
+    // ============================================================
+    // next_layer_count: 境界条件
+    // ============================================================
+
+    #[test]
+    fn test_next_layer_count_threshold_boundary() {
+        // FALLBACK_MAX_LAYERS * 2 = 80 が閾値
+        // 79 (閾値未満) → 39 (通常の二分探索)
+        assert_eq!(next_layer_count(79), 39);
+        // 80 (閾値丁度) → FALLBACK_MAX_LAYERS (40)
+        assert_eq!(next_layer_count(80), FALLBACK_MAX_LAYERS);
+        // 81 (閾値超過) → FALLBACK_MAX_LAYERS (40)
+        assert_eq!(next_layer_count(81), FALLBACK_MAX_LAYERS);
+    }
+
+    #[test]
+    fn test_next_layer_count_zero_input() {
+        // 0 は通常呼ばれないが、安全に0を返す
+        assert_eq!(next_layer_count(0), 0);
+    }
+
+    #[test]
+    fn test_next_layer_count_one_input() {
+        assert_eq!(next_layer_count(1), 0);
+    }
+
+    // ============================================================
+    // フォールバックシーケンス: 追加パターン
+    // ============================================================
+
+    #[test]
+    fn test_fallback_sequence_from_one() {
+        // 1層 → 0 の最小シーケンス
+        let mut layers = 1u32;
+        let mut seq = vec![layers];
+        while layers > 0 {
+            layers = next_layer_count(layers);
+            seq.push(layers);
+        }
+        assert_eq!(seq, vec![1, 0]);
+    }
+
+    #[test]
+    fn test_fallback_sequence_from_odd() {
+        // 奇数 7 → 3 → 1 → 0
+        let mut layers = 7u32;
+        let mut seq = vec![layers];
+        while layers > 0 {
+            layers = next_layer_count(layers);
+            seq.push(layers);
+        }
+        assert_eq!(seq, vec![7, 3, 1, 0]);
+    }
+
+    #[test]
+    fn test_fallback_sequence_terminates() {
+        // 任意の初期値からシーケンスが有限回で0に到達する
+        for initial in [1, 2, 5, 10, 20, 40, 79, 80, 100, 1000, u32::MAX] {
+            let mut layers = initial;
+            let mut steps = 0u32;
+            while layers > 0 {
+                layers = next_layer_count(layers);
+                steps += 1;
+                assert!(steps < 100, "initial={}で100回以内に終了しない", initial);
+            }
+        }
+    }
+
+    #[test]
+    fn test_fallback_sequence_strictly_decreasing() {
+        // シーケンスは厳密に減少する（無限ループしない）
+        let mut layers = u32::MAX;
+        let mut prev = layers;
+        while layers > 0 {
+            layers = next_layer_count(layers);
+            assert!(
+                layers < prev,
+                "{}→{}: 厳密減少に違反",
+                prev, layers
+            );
+            prev = layers;
+        }
+    }
+
+    #[test]
+    fn test_fallback_max_steps_from_u32_max() {
+        // u32::MAX からのシーケンス長が適切な範囲内
+        let mut layers = u32::MAX;
+        let mut steps = 0u32;
+        while layers > 0 {
+            layers = next_layer_count(layers);
+            steps += 1;
+        }
+        // u32::MAX → 40 → 20 → 10 → 5 → 2 → 1 → 0 = 7ステップ
+        assert_eq!(steps, 7);
+    }
 }
