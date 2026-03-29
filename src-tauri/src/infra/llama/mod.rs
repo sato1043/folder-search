@@ -8,26 +8,91 @@ use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
 
-use crate::domain::llm::{LlmError, LlmInference};
+use crate::domain::llm::{estimate_gpu_layers, LlmError, LlmInference};
+
+/// 全層オフロード失敗時の最初のフォールバック層数
+const FALLBACK_MAX_LAYERS: u32 = 40;
 
 /// llama.cpp による LLM推論エンジン
 pub struct LlamaEngine {
     backend: LlamaBackend,
     model: LlamaModel,
+    /// 実際に使用されたGPUオフロード層数（0 = CPU推論）
+    gpu_layers: u32,
 }
 
 impl LlamaEngine {
-    /// GGUFモデルをロードして初期化する
-    pub fn new(model_path: &str) -> Result<Self, LlmError> {
+    /// GGUFモデルをロードして初期化する（VRAM推定+適応的GPUオフロード）
+    ///
+    /// model_size_bytes と vram_mb からオフロード層数を推定し、
+    /// 失敗時は二分探索で段階的に削減、最終的にCPUフォールバックする
+    pub fn new(model_path: &str, model_size_bytes: u64, vram_mb: u64) -> Result<Self, LlmError> {
+        let initial_layers = estimate_gpu_layers(model_size_bytes, vram_mb);
+        Self::load_adaptive(model_path, initial_layers)
+    }
+
+    /// 適応的にGPU層数を探索してモデルをロードする
+    fn load_adaptive(model_path: &str, initial_layers: u32) -> Result<Self, LlmError> {
         let backend =
             LlamaBackend::init().map_err(|e| LlmError::ModelLoadError(e.to_string()))?;
 
-        let model_params = pin!(LlamaModelParams::default());
+        let mut layers = initial_layers;
+        loop {
+            match Self::try_load_model(&backend, model_path, layers) {
+                Ok(model) => {
+                    if layers != initial_layers {
+                        eprintln!(
+                            "GPU {}層でモデルロード成功（初期推定: {}層）",
+                            layers, initial_layers
+                        );
+                    }
+                    return Ok(Self {
+                        backend,
+                        model,
+                        gpu_layers: layers,
+                    });
+                }
+                Err(e) => {
+                    if layers == 0 {
+                        return Err(e);
+                    }
+                    eprintln!("GPU {}層でロード失敗、削減して再試行: {}", layers, e);
+                    layers = next_layer_count(layers);
+                }
+            }
+        }
+    }
 
-        let model = LlamaModel::load_from_file(&backend, model_path, &model_params)
-            .map_err(|e| LlmError::ModelLoadError(e.to_string()))?;
+    /// 指定したGPU層数でモデルのロードを試みる
+    fn try_load_model(
+        backend: &LlamaBackend,
+        model_path: &str,
+        n_gpu_layers: u32,
+    ) -> Result<LlamaModel, LlmError> {
+        let model_params = pin!(LlamaModelParams::default().with_n_gpu_layers(n_gpu_layers));
 
-        Ok(Self { backend, model })
+        LlamaModel::load_from_file(backend, model_path, &model_params)
+            .map_err(|e| LlmError::ModelLoadError(e.to_string()))
+    }
+
+    /// 実際に使用されたGPUオフロード層数を返す（0 = CPU推論）
+    pub fn gpu_layers(&self) -> u32 {
+        self.gpu_layers
+    }
+
+    /// GPU推論が有効かどうかを返す
+    pub fn is_gpu_active(&self) -> bool {
+        self.gpu_layers > 0
+    }
+}
+
+/// 次に試行するレイヤー数を計算する（二分探索）
+fn next_layer_count(current: u32) -> u32 {
+    if current >= FALLBACK_MAX_LAYERS * 2 {
+        // u32::MAX や極端に大きい値からの最初のフォールバック
+        FALLBACK_MAX_LAYERS
+    } else {
+        current / 2
     }
 }
 
@@ -108,5 +173,61 @@ impl LlmInference for LlamaEngine {
         }
 
         Ok(full_response)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_next_layer_count_from_max() {
+        // u32::MAX → FALLBACK_MAX_LAYERS (40)
+        assert_eq!(next_layer_count(u32::MAX), FALLBACK_MAX_LAYERS);
+    }
+
+    #[test]
+    fn test_next_layer_count_from_large_value() {
+        // 100 (>= 80) → FALLBACK_MAX_LAYERS
+        assert_eq!(next_layer_count(100), FALLBACK_MAX_LAYERS);
+    }
+
+    #[test]
+    fn test_next_layer_count_binary_search() {
+        // 40 → 20 → 10 → 5 → 2 → 1 → 0
+        assert_eq!(next_layer_count(40), 20);
+        assert_eq!(next_layer_count(20), 10);
+        assert_eq!(next_layer_count(10), 5);
+        assert_eq!(next_layer_count(5), 2);
+        assert_eq!(next_layer_count(2), 1);
+        assert_eq!(next_layer_count(1), 0);
+    }
+
+    #[test]
+    fn test_full_fallback_sequence() {
+        // u32::MAX から CPU(0) までの完全なシーケンスを検証
+        let mut layers = u32::MAX;
+        let mut sequence = vec![layers];
+        while layers > 0 {
+            layers = next_layer_count(layers);
+            sequence.push(layers);
+        }
+
+        // u32::MAX → 40 → 20 → 10 → 5 → 2 → 1 → 0
+        assert_eq!(sequence, vec![u32::MAX, 40, 20, 10, 5, 2, 1, 0]);
+    }
+
+    #[test]
+    fn test_fallback_sequence_from_partial() {
+        // 部分オフロード（24層）からのフォールバック
+        let mut layers = 24u32;
+        let mut sequence = vec![layers];
+        while layers > 0 {
+            layers = next_layer_count(layers);
+            sequence.push(layers);
+        }
+
+        // 24 → 12 → 6 → 3 → 1 → 0
+        assert_eq!(sequence, vec![24, 12, 6, 3, 1, 0]);
     }
 }

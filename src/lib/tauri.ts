@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { SearchResult, HybridSearchResult, IndexStatus } from "../types";
-import type { LlmModelInfo, RagAnswer, SystemInfo, ModelRecommendation } from "../types";
+import type { LlmModelInfo, RagAnswer, SystemInfo, ModelRecommendation, LlmLoadResult } from "../types";
 
 export async function buildIndex(folderPath: string, indexPath: string): Promise<number> {
   return invoke<number>("build_index", { folderPath, indexPath });
@@ -45,8 +45,8 @@ export async function downloadLlmModel(filename: string, url: string): Promise<v
   return invoke<void>("download_llm_model", { filename, url });
 }
 
-export async function loadLlmModel(filename: string): Promise<void> {
-  return invoke<void>("load_llm_model", { filename });
+export async function loadLlmModel(filename: string): Promise<LlmLoadResult> {
+  return invoke<LlmLoadResult>("load_llm_model", { filename });
 }
 
 export async function isLlmReady(): Promise<boolean> {

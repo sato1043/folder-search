@@ -557,24 +557,47 @@ pub async fn download_llm_model(
     Ok(())
 }
 
+/// LLMモデルのロード結果
+#[derive(serde::Serialize)]
+pub struct LlmLoadResult {
+    /// GPU推論が有効か
+    pub gpu_active: bool,
+    /// 使用されたGPUオフロード層数
+    pub gpu_layers: u32,
+}
+
 /// LLMモデルをロードする
 #[tauri::command]
 pub fn load_llm_model(
     filename: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> Result<LlmLoadResult, String> {
     let model_path = state.model_dir.join(&filename);
     if !model_path.exists() {
         return Err(format!("モデルファイルが見つからない: {}", model_path.display()));
     }
 
-    let engine = LlamaEngine::new(model_path.to_str().unwrap_or(""))
+    // モデルファイルサイズを取得
+    let model_size_bytes = std::fs::metadata(&model_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    // GPU VRAMを取得（最大VRAMを使用）
+    let system_info = crate::infra::system::detect_system_info();
+    let vram_mb = system_info.gpus.iter().map(|g| g.vram_mb).max().unwrap_or(0);
+
+    let engine = LlamaEngine::new(model_path.to_str().unwrap_or(""), model_size_bytes, vram_mb)
         .map_err(|e| format!("モデルロード失敗: {}", e))?;
+
+    let result = LlmLoadResult {
+        gpu_active: engine.is_gpu_active(),
+        gpu_layers: engine.gpu_layers(),
+    };
 
     let mut guard = state.llm_engine.lock().map_err(|e| e.to_string())?;
     *guard = Some(engine);
 
-    Ok(())
+    Ok(result)
 }
 
 /// LLMがロード済みかどうか

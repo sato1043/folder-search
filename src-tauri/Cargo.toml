@@ -39,6 +39,10 @@ notify = "7"
 notify-debouncer-mini = "0.5"
 sysinfo = "0.32"
 
+[features]
+default = []
+cuda = ["llama-cpp-2/cuda"]
+
 [dev-dependencies]
 tempfile = "3"
 

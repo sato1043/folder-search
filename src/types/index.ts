@@ -79,3 +79,9 @@ export type ModelRecommendation = {
   is_best_fit: boolean;
   reason: string;
 };
+
+/** LLMモデルロード結果 */
+export type LlmLoadResult = {
+  gpu_active: boolean;
+  gpu_layers: number;
+};

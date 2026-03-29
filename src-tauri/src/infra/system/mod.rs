@@ -7,10 +7,13 @@ pub fn detect_system_info() -> SystemInfo {
     let total_ram_mb = detect_ram_mb();
     let gpus = detect_gpus();
 
+    // macOS は Metal が自動有効、cuda フィーチャー有効時は CUDA が利用可能
+    let gpu_inference_available = cfg!(target_os = "macos") || cfg!(feature = "cuda");
+
     SystemInfo {
         total_ram_mb,
         gpus,
-        gpu_inference_available: false, // フェーズBで変更
+        gpu_inference_available,
     }
 }
 
@@ -216,8 +219,10 @@ mod tests {
     fn test_detect_system_info_structure() {
         let info = detect_system_info();
         assert!(info.total_ram_mb > 0);
-        assert!(!info.gpu_inference_available);
-        // GPUは環境依存のため件数は検証しない
+        // gpu_inference_available はプラットフォームとフィーチャーに依存する
+        // macOS または cuda フィーチャー有効時は true
+        let expected = cfg!(target_os = "macos") || cfg!(feature = "cuda");
+        assert_eq!(info.gpu_inference_available, expected);
     }
 
     #[test]

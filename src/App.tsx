@@ -30,6 +30,7 @@ import type {
   VectorIndexProgress,
   SearchMode,
   LlmModelInfo,
+  LlmLoadResult,
   SystemInfo,
   ModelRecommendation,
 } from "./types";
@@ -58,6 +59,7 @@ function App() {
   const [llmModels, setLlmModels] = useState<LlmModelInfo[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [isLoadingLlm, setIsLoadingLlm] = useState(false);
+  const [llmLoadResult, setLlmLoadResult] = useState<LlmLoadResult | null>(null);
   const [chatAnswer, setChatAnswer] = useState<string | null>(null);
   const [chatSources, setChatSources] = useState<string[]>([]);
   const [isChatting, setIsChatting] = useState(false);
@@ -219,7 +221,8 @@ function App() {
       setDownloadStatus("LLMモデルダウンロード中...");
       await downloadLlmModel(model.filename, model.url);
       setDownloadStatus("モデルロード中...");
-      await loadLlmModel(model.filename);
+      const result = await loadLlmModel(model.filename);
+      setLlmLoadResult(result);
       setLlmReady(true);
       setIsLoadingLlm(false);
       setDownloadStatus("");
@@ -355,7 +358,16 @@ function App() {
           <button onClick={handleDownloadAndLoadLlm} disabled={isLoadingLlm || !selectedModel}>
             {isLoadingLlm ? "準備中..." : llmReady ? "モデル切替" : "LLMモデル取得・ロード"}
           </button>
-          {llmReady && <p className="status-ok">LLMモデル: 準備完了</p>}
+          {llmReady && (
+            <p className="status-ok">
+              LLMモデル: 準備完了
+              {llmLoadResult && (
+                llmLoadResult.gpu_active
+                  ? ` (GPU: ${llmLoadResult.gpu_layers}層)`
+                  : " (CPU)"
+              )}
+            </p>
+          )}
         </div>
 
         {(isDownloading || isLoadingLlm) && <p className="progress-text">{downloadStatus}</p>}

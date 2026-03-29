@@ -351,7 +351,7 @@ pub struct AppState {
 
 ## 8. テスト構成
 
-### 8.1 テスト総数: 58件
+### 8.1 テスト総数: 72件
 
 | カテゴリ | ファイル | 件数 |
 |---|---|---|
@@ -362,6 +362,8 @@ pub struct AppState {
 | ベクトルキャッシュ | `infra/vector_cache/mod.rs` | 9 |
 | システム情報検出 | `infra/system/mod.rs` | 3 |
 | モデル推奨ロジック | `domain/system/mod.rs` | 10 |
+| GPU推定ロジック | `domain/llm/mod.rs` | 9 |
+| GPUフォールバック | `infra/llama/mod.rs` | 5 |
 | モデル管理 | `infra/model/mod.rs` | 2 |
 | RAGパイプライン | `domain/llm/rag.rs` | 5 |
 | Appコンポーネント | `src/App.test.tsx` | 1 |
@@ -493,9 +495,71 @@ get_model_recommendations コマンド
   - サイドバーにシステム情報を簡易表示
 ```
 
-### 11.5 将来拡張（フェーズB: GPU推論）
+### 11.5 GPU推論（フェーズB）
 
-- llama-cpp-2 の CUDA/Metal フィーチャーを有効化する
-- GPU推論をデフォルトとし、GPU不可時にCPUフォールバックする
-- `gpu_inference_available` を動的に判定し、推奨ロジックをVRAM基準に切り替える
-- `LlamaModelParams` に `n_gpu_layers` 等のGPUパラメータを設定する
+#### GPU バックエンド
+
+| プラットフォーム | バックエンド | 有効化方法 |
+|---|---|---|
+| macOS | Metal | 自動（フィーチャーフラグ不要） |
+| Windows/Linux (NVIDIA) | CUDA | `--features cuda` でビルド |
+
+Cargo.toml でオプショナルフィーチャーとして定義する:
+```toml
+[features]
+default = []
+cuda = ["llama-cpp-2/cuda"]
+```
+
+#### 適応的GPUレイヤーオフロード
+
+GPU推論をデフォルトとし、VRAM不足時は段階的にオフロード量を削減する。
+
+```
+モデルロード要求
+  ↓
+estimate_gpu_layers(model_size_bytes, vram_mb)
+  → VRAM推定でオフロードレイヤー数を算出
+  ↓
+try_load(path, estimated_layers)
+  → 成功 → 完了（GPU推論）
+  → 失敗 ↓
+layers /= 2 で半減して再試行（二分探索）
+  → 成功 → 完了（部分GPU推論）
+  → 失敗 → さらに半減…
+  ↓
+layers == 0 で最終試行
+  → 成功 → 完了（CPU推論フォールバック）
+  → 失敗 → エラー
+```
+
+推定ロジック（`domain/llm/mod.rs`）:
+```
+overhead = 512MB（KVキャッシュ+ワークスペース）
+available = vram_mb - overhead
+
+available >= model_mb → 全層オフロード（u32::MAX）
+available > 0         → 比例配分（available / model_mb × 推定層数）
+available <= 0        → CPU推論（0層）
+```
+
+#### gpu_inference_available の判定
+
+コンパイル時フィーチャーフラグで判定する:
+```rust
+gpu_inference_available: cfg!(target_os = "macos") || cfg!(feature = "cuda")
+```
+
+GPU推論が有効な場合、推奨ロジックはVRAMベースに自動切り替えされる（フェーズA実装済み）。
+
+#### LlamaEngine のインタフェース変更
+
+```rust
+// 変更前
+pub fn new(model_path: &str) -> Result<Self, LlmError>
+
+// 変更後
+pub fn new(model_path: &str, model_size_bytes: u64, vram_mb: u64) -> Result<Self, LlmError>
+```
+
+戻り値の `LlamaEngine` に実際に使用された `n_gpu_layers` を保持し、フロントエンドにGPU/CPU推論のステータスを返す。
