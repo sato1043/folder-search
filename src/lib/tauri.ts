@@ -53,8 +53,16 @@ export async function downloadLlmModel(filename: string, url: string): Promise<v
   return invoke<void>("download_llm_model", { filename, url });
 }
 
-export async function loadLlmModel(filename: string): Promise<LlmLoadResult> {
-  return invoke<LlmLoadResult>("load_llm_model", { filename });
+export async function loadLlmModel(
+  filename: string,
+  chatTemplate: string,
+  contextLength: number,
+): Promise<LlmLoadResult> {
+  return invoke<LlmLoadResult>("load_llm_model", {
+    filename,
+    chatTemplate,
+    contextLength,
+  });
 }
 
 export async function isLlmReady(): Promise<boolean> {

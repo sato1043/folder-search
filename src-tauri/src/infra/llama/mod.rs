@@ -19,20 +19,28 @@ pub struct LlamaEngine {
     model: LlamaModel,
     /// 実際に使用されたGPUオフロード層数（0 = CPU推論）
     gpu_layers: u32,
+    /// コンテキスト長（トークン数）
+    context_length: u32,
 }
 
 impl LlamaEngine {
     /// GGUFモデルをロードして初期化する（VRAM推定+適応的GPUオフロード）
-    ///
-    /// model_size_bytes と vram_mb からオフロード層数を推定し、
-    /// 失敗時は二分探索で段階的に削減、最終的にCPUフォールバックする
-    pub fn new(model_path: &str, model_size_bytes: u64, vram_mb: u64) -> Result<Self, LlmError> {
+    pub fn new(
+        model_path: &str,
+        model_size_bytes: u64,
+        vram_mb: u64,
+        context_length: u32,
+    ) -> Result<Self, LlmError> {
         let initial_layers = estimate_gpu_layers(model_size_bytes, vram_mb);
-        Self::load_adaptive(model_path, initial_layers)
+        Self::load_adaptive(model_path, initial_layers, context_length)
     }
 
     /// 適応的にGPU層数を探索してモデルをロードする
-    fn load_adaptive(model_path: &str, initial_layers: u32) -> Result<Self, LlmError> {
+    fn load_adaptive(
+        model_path: &str,
+        initial_layers: u32,
+        context_length: u32,
+    ) -> Result<Self, LlmError> {
         let backend =
             LlamaBackend::init().map_err(|e| LlmError::ModelLoadError(e.to_string()))?;
 
@@ -50,6 +58,7 @@ impl LlamaEngine {
                         backend,
                         model,
                         gpu_layers: layers,
+                        context_length,
                     });
                 }
                 Err(e) => {
@@ -106,7 +115,7 @@ impl LlmInference for LlamaEngine {
     where
         F: FnMut(&str),
     {
-        let ctx_size = NonZeroU32::new(2048).unwrap();
+        let ctx_size = NonZeroU32::new(self.context_length).unwrap();
         let ctx_params = LlamaContextParams::default().with_n_ctx(Some(ctx_size));
 
         let mut ctx = self
@@ -121,7 +130,7 @@ impl LlmInference for LlamaEngine {
             .map_err(|e| LlmError::TokenizeError(e.to_string()))?;
 
         // バッチにトークンを投入
-        let mut batch = LlamaBatch::new(2048, 1);
+        let mut batch = LlamaBatch::new(self.context_length as usize, 1);
         let last_idx = (tokens.len() - 1) as i32;
         for (i, token) in (0_i32..).zip(tokens.into_iter()) {
             batch

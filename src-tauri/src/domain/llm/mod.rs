@@ -1,3 +1,4 @@
+pub mod chat_template;
 pub mod rag;
 
 /// LLM推論のトレイト
@@ -19,6 +20,8 @@ pub enum LlmError {
     TokenizeError(String),
 }
 
+use chat_template::ChatTemplate;
+
 /// 利用可能なLLMモデル情報
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LlmModelInfo {
@@ -36,6 +39,10 @@ pub struct LlmModelInfo {
     pub params: String,
     /// 量子化レベル
     pub quantization: String,
+    /// チャットテンプレート
+    pub chat_template: ChatTemplate,
+    /// コンテキスト長（トークン数）
+    pub context_length: u32,
 }
 
 /// ダウンロード済みモデルの情報
@@ -91,6 +98,7 @@ pub fn estimate_gpu_layers(model_size_bytes: u64, vram_mb: u64) -> u32 {
 /// デフォルトのモデルリスト
 pub fn available_models() -> Vec<LlmModelInfo> {
     vec![
+        // --- Qwen2.5 ---
         LlmModelInfo {
             name: "Qwen2.5-0.5B-Instruct (Q4_K_M)".to_string(),
             filename: "qwen2.5-0.5b-instruct-q4_k_m.gguf".to_string(),
@@ -99,6 +107,8 @@ pub fn available_models() -> Vec<LlmModelInfo> {
             min_vram_mb: 0,
             params: "0.5B".to_string(),
             quantization: "Q4_K_M".to_string(),
+            chat_template: ChatTemplate::Chatml,
+            context_length: 32768,
         },
         LlmModelInfo {
             name: "Qwen2.5-1.5B-Instruct (Q4_K_M)".to_string(),
@@ -108,6 +118,8 @@ pub fn available_models() -> Vec<LlmModelInfo> {
             min_vram_mb: 2048,
             params: "1.5B".to_string(),
             quantization: "Q4_K_M".to_string(),
+            chat_template: ChatTemplate::Chatml,
+            context_length: 32768,
         },
         LlmModelInfo {
             name: "Qwen2.5-7B-Instruct (Q4_K_M)".to_string(),
@@ -117,6 +129,8 @@ pub fn available_models() -> Vec<LlmModelInfo> {
             min_vram_mb: 6144,
             params: "7B".to_string(),
             quantization: "Q4_K_M".to_string(),
+            chat_template: ChatTemplate::Chatml,
+            context_length: 32768,
         },
         LlmModelInfo {
             name: "Qwen2.5-14B-Instruct (Q4_K_M)".to_string(),
@@ -126,6 +140,42 @@ pub fn available_models() -> Vec<LlmModelInfo> {
             min_vram_mb: 12288,
             params: "14B".to_string(),
             quantization: "Q4_K_M".to_string(),
+            chat_template: ChatTemplate::Chatml,
+            context_length: 32768,
+        },
+        // --- Gemma 3 ---
+        LlmModelInfo {
+            name: "Gemma 3 1B Instruct (Q4_K_M)".to_string(),
+            filename: "gemma-3-1b-it-Q4_K_M.gguf".to_string(),
+            url: "https://huggingface.co/unsloth/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_K_M.gguf".to_string(),
+            size_bytes: 714 * 1024 * 1024,
+            min_vram_mb: 0,
+            params: "1B".to_string(),
+            quantization: "Q4_K_M".to_string(),
+            chat_template: ChatTemplate::Gemma,
+            context_length: 32768,
+        },
+        LlmModelInfo {
+            name: "Gemma 3 4B Instruct (Q4_K_M)".to_string(),
+            filename: "google_gemma-3-4b-it-Q4_K_M.gguf".to_string(),
+            url: "https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/resolve/main/google_gemma-3-4b-it-Q4_K_M.gguf".to_string(),
+            size_bytes: 2_900 * 1024 * 1024,
+            min_vram_mb: 4096,
+            params: "4B".to_string(),
+            quantization: "Q4_K_M".to_string(),
+            chat_template: ChatTemplate::Gemma,
+            context_length: 32768,
+        },
+        LlmModelInfo {
+            name: "Gemma 3 12B Instruct (Q4_K_M)".to_string(),
+            filename: "google_gemma-3-12b-it-Q4_K_M.gguf".to_string(),
+            url: "https://huggingface.co/bartowski/google_gemma-3-12b-it-GGUF/resolve/main/google_gemma-3-12b-it-Q4_K_M.gguf".to_string(),
+            size_bytes: 7_300 * 1024 * 1024,
+            min_vram_mb: 8192,
+            params: "12B".to_string(),
+            quantization: "Q4_K_M".to_string(),
+            chat_template: ChatTemplate::Gemma,
+            context_length: 32768,
         },
     ]
 }

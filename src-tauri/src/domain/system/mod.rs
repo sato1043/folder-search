@@ -148,6 +148,8 @@ mod tests {
                 min_vram_mb: 0,
                 params: "0.5B".to_string(),
                 quantization: "Q4_K_M".to_string(),
+                chat_template: crate::domain::llm::chat_template::ChatTemplate::Chatml,
+                context_length: 32768,
             },
             LlmModelInfo {
                 name: "1.5B".to_string(),
@@ -157,6 +159,8 @@ mod tests {
                 min_vram_mb: 2048,
                 params: "1.5B".to_string(),
                 quantization: "Q4_K_M".to_string(),
+                chat_template: crate::domain::llm::chat_template::ChatTemplate::Chatml,
+                context_length: 32768,
             },
             LlmModelInfo {
                 name: "7B".to_string(),
@@ -166,6 +170,8 @@ mod tests {
                 min_vram_mb: 6144,
                 params: "7B".to_string(),
                 quantization: "Q4_K_M".to_string(),
+                chat_template: crate::domain::llm::chat_template::ChatTemplate::Chatml,
+                context_length: 32768,
             },
             LlmModelInfo {
                 name: "14B".to_string(),
@@ -175,6 +181,8 @@ mod tests {
                 min_vram_mb: 12288,
                 params: "14B".to_string(),
                 quantization: "Q4_K_M".to_string(),
+                chat_template: crate::domain::llm::chat_template::ChatTemplate::Chatml,
+                context_length: 32768,
             },
         ]
     }

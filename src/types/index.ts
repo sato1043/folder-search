@@ -39,6 +39,9 @@ export type VectorIndexProgress = {
 /** 検索モード */
 export type SearchMode = "fulltext" | "hybrid";
 
+/** チャットテンプレート */
+export type ChatTemplateType = "chatml" | "gemma" | "llama3";
+
 /** LLMモデル情報 */
 export type LlmModelInfo = {
   name: string;
@@ -48,6 +51,8 @@ export type LlmModelInfo = {
   min_vram_mb: number;
   params: string;
   quantization: string;
+  chat_template: ChatTemplateType;
+  context_length: number;
 };
 
 /** RAG回答結果 */

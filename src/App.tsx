@@ -239,7 +239,7 @@ function App() {
       setDownloadStatus("LLMモデルダウンロード中...");
       await downloadLlmModel(model.filename, model.url);
       setDownloadStatus("モデルロード中...");
-      const result = await loadLlmModel(model.filename);
+      const result = await loadLlmModel(model.filename, model.chat_template, model.context_length);
       setLlmLoadResult(result);
       setLlmReady(true);
     } catch (e) {

@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use super::chat_template::ChatTemplate;
+
 /// RAGで使用するコンテキストチャンク
 #[derive(Debug, Clone, Serialize)]
 pub struct ContextChunk {
@@ -18,33 +20,37 @@ pub struct RagAnswer {
     pub sources: Vec<String>,
 }
 
-/// 検索結果からRAGプロンプトを構築する
-pub fn build_rag_prompt(question: &str, context_chunks: &[ContextChunk]) -> String {
-    let mut prompt = String::new();
+/// RAG用のシステムメッセージ
+const SYSTEM_MESSAGE: &str = "\
+あなたはナレッジベースに基づいて質問に回答するアシスタントです。\n\
+以下のコンテキストに基づいて質問に回答してください。\n\
+コンテキストに情報がない場合は「情報が見つかりませんでした」と回答してください。\n\
+回答の最後に、参照したファイルのパスを[参照: ファイルパス]の形式で記載してください。";
 
-    prompt.push_str("<|im_start|>system\n");
-    prompt.push_str("あなたはナレッジベースに基づいて質問に回答するアシスタントです。\n");
-    prompt.push_str("以下のコンテキストに基づいて質問に回答してください。\n");
-    prompt.push_str("コンテキストに情報がない場合は「情報が見つかりませんでした」と回答してください。\n");
-    prompt.push_str("回答の最後に、参照したファイルのパスを[参照: ファイルパス]の形式で記載してください。\n");
-    prompt.push_str("<|im_end|>\n");
-
-    prompt.push_str("<|im_start|>user\n");
-    prompt.push_str("## コンテキスト\n\n");
+/// コンテキストと質問からユーザーメッセージを組み立てる
+fn build_user_message(question: &str, context_chunks: &[ContextChunk]) -> String {
+    let mut user = String::new();
+    user.push_str("## コンテキスト\n\n");
 
     for (i, chunk) in context_chunks.iter().enumerate() {
-        prompt.push_str(&format!("### ファイル{}: {}\n", i + 1, chunk.path));
-        prompt.push_str(&chunk.text);
-        prompt.push_str("\n\n");
+        user.push_str(&format!("### ファイル{}: {}\n", i + 1, chunk.path));
+        user.push_str(&chunk.text);
+        user.push_str("\n\n");
     }
 
-    prompt.push_str("## 質問\n");
-    prompt.push_str(question);
-    prompt.push_str("\n<|im_end|>\n");
+    user.push_str("## 質問\n");
+    user.push_str(question);
+    user
+}
 
-    prompt.push_str("<|im_start|>assistant\n");
-
-    prompt
+/// 検索結果からRAGプロンプトを構築する
+pub fn build_rag_prompt(
+    question: &str,
+    context_chunks: &[ContextChunk],
+    template: &ChatTemplate,
+) -> String {
+    let user_message = build_user_message(question, context_chunks);
+    template.format_prompt(SYSTEM_MESSAGE, &user_message)
 }
 
 /// LLMの回答から参照元ファイルを抽出する
@@ -69,9 +75,8 @@ pub fn extract_sources(answer: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_build_rag_prompt_contains_context() {
-        let chunks = vec![
+    fn test_chunks() -> Vec<ContextChunk> {
+        vec![
             ContextChunk {
                 path: "/docs/rust.md".to_string(),
                 text: "RustはMozillaが開発したプログラミング言語".to_string(),
@@ -80,22 +85,59 @@ mod tests {
                 path: "/docs/tauri.md".to_string(),
                 text: "TauriはRust製のデスクトップフレームワーク".to_string(),
             },
-        ];
+        ]
+    }
 
-        let prompt = build_rag_prompt("Rustとは何ですか？", &chunks);
+    #[test]
+    fn test_build_rag_prompt_chatml() {
+        let chunks = test_chunks();
+        let prompt = build_rag_prompt("Rustとは何ですか？", &chunks, &ChatTemplate::Chatml);
 
         assert!(prompt.contains("Rustとは何ですか？"));
         assert!(prompt.contains("/docs/rust.md"));
         assert!(prompt.contains("RustはMozillaが開発した"));
-        assert!(prompt.contains("/docs/tauri.md"));
         assert!(prompt.contains("<|im_start|>assistant"));
     }
 
     #[test]
+    fn test_build_rag_prompt_gemma() {
+        let chunks = test_chunks();
+        let prompt = build_rag_prompt("Rustとは何ですか？", &chunks, &ChatTemplate::Gemma);
+
+        assert!(prompt.contains("Rustとは何ですか？"));
+        assert!(prompt.contains("/docs/rust.md"));
+        assert!(prompt.contains("<start_of_turn>model"));
+        // Gemma は system ロールがないため im_start は含まれない
+        assert!(!prompt.contains("<|im_start|>"));
+    }
+
+    #[test]
+    fn test_build_rag_prompt_llama3() {
+        let chunks = test_chunks();
+        let prompt = build_rag_prompt("Rustとは何ですか？", &chunks, &ChatTemplate::Llama3);
+
+        assert!(prompt.contains("Rustとは何ですか？"));
+        assert!(prompt.contains("<|start_header_id|>assistant<|end_header_id|>"));
+        assert!(prompt.contains("<|start_header_id|>system<|end_header_id|>"));
+    }
+
+    #[test]
     fn test_build_rag_prompt_empty_context() {
-        let prompt = build_rag_prompt("テスト質問", &[]);
+        let prompt = build_rag_prompt("テスト質問", &[], &ChatTemplate::Chatml);
         assert!(prompt.contains("テスト質問"));
         assert!(prompt.contains("assistant"));
+    }
+
+    #[test]
+    fn test_build_rag_prompt_contains_system_message() {
+        for template in [ChatTemplate::Chatml, ChatTemplate::Gemma, ChatTemplate::Llama3] {
+            let prompt = build_rag_prompt("質問", &[], &template);
+            assert!(
+                prompt.contains("ナレッジベースに基づいて"),
+                "template {:?} にシステムメッセージが含まれるべき",
+                template
+            );
+        }
     }
 
     #[test]

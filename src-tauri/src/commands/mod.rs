@@ -10,6 +10,7 @@ use crate::domain::llm::rag::{build_rag_prompt, extract_sources, ContextChunk, R
 use crate::domain::llm::{available_models, DownloadedModelInfo, LlmInference, LlmModelInfo, StorageUsage};
 use crate::domain::search::hybrid::{reciprocal_rank_fusion, HybridSearchResult};
 use crate::domain::search::{FulltextSearcher, SearchResult};
+use crate::domain::llm::chat_template::ChatTemplate;
 use crate::domain::system::{recommend_models, ModelRecommendation, SystemInfo};
 use crate::infra::hnsw::HnswVectorIndex;
 use crate::infra::llama::LlamaEngine;
@@ -21,6 +22,13 @@ use crate::infra::watcher::FileWatcher;
 
 use tauri::Manager;
 
+/// ロード済みLLMモデルの設定
+pub struct LoadedLlmConfig {
+    pub filename: String,
+    pub chat_template: ChatTemplate,
+    pub context_length: u32,
+}
+
 /// アプリの状態
 pub struct AppState {
     pub engine: Mutex<Option<TantivySearchEngine>>,
@@ -30,6 +38,7 @@ pub struct AppState {
     pub model_dir: PathBuf,
     pub folder_path: Mutex<Option<String>>,
     pub watcher: Mutex<Option<FileWatcher>>,
+    pub loaded_llm_config: Mutex<Option<LoadedLlmConfig>>,
 }
 
 /// 全文検索インデックスを構築する
@@ -570,12 +579,18 @@ pub struct LlmLoadResult {
 #[tauri::command]
 pub fn load_llm_model(
     filename: String,
+    chat_template: String,
+    context_length: u32,
     state: State<'_, AppState>,
 ) -> Result<LlmLoadResult, String> {
     let model_path = state.model_dir.join(&filename);
     if !model_path.exists() {
         return Err(format!("モデルファイルが見つからない: {}", model_path.display()));
     }
+
+    // chat_template 文字列をデシリアライズ
+    let template: ChatTemplate = serde_json::from_str(&format!("\"{}\"", chat_template))
+        .map_err(|_| format!("不明なチャットテンプレート: {}", chat_template))?;
 
     // モデルファイルサイズを取得
     let model_size_bytes = std::fs::metadata(&model_path)
@@ -586,13 +601,28 @@ pub fn load_llm_model(
     let system_info = crate::infra::system::detect_system_info();
     let vram_mb = system_info.gpus.iter().map(|g| g.vram_mb).max().unwrap_or(0);
 
-    let engine = LlamaEngine::new(model_path.to_str().unwrap_or(""), model_size_bytes, vram_mb)
-        .map_err(|e| format!("モデルロード失敗: {}", e))?;
+    let engine = LlamaEngine::new(
+        model_path.to_str().unwrap_or(""),
+        model_size_bytes,
+        vram_mb,
+        context_length,
+    )
+    .map_err(|e| format!("モデルロード失敗: {}", e))?;
 
     let result = LlmLoadResult {
         gpu_active: engine.is_gpu_active(),
         gpu_layers: engine.gpu_layers(),
     };
+
+    // ロード済みモデル設定を保存
+    {
+        let mut config_guard = state.loaded_llm_config.lock().map_err(|e| e.to_string())?;
+        *config_guard = Some(LoadedLlmConfig {
+            filename: filename.clone(),
+            chat_template: template,
+            context_length,
+        });
+    }
 
     let mut guard = state.llm_engine.lock().map_err(|e| e.to_string())?;
     *guard = Some(engine);
@@ -666,8 +696,17 @@ pub fn chat(
         chunks
     };
 
+    // ロード済みモデルのテンプレートを取得（未設定時は ChatML）
+    let template = {
+        let config_guard = state.loaded_llm_config.lock().map_err(|e| e.to_string())?;
+        config_guard
+            .as_ref()
+            .map(|c| c.chat_template.clone())
+            .unwrap_or(crate::domain::llm::chat_template::ChatTemplate::Chatml)
+    };
+
     // RAGプロンプトを構築
-    let prompt = build_rag_prompt(&question, &context_chunks);
+    let prompt = build_rag_prompt(&question, &context_chunks, &template);
     let source_paths: Vec<String> = context_chunks.iter().map(|c| c.path.clone()).collect();
 
     // LLM推論

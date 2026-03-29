@@ -119,20 +119,11 @@ SearchResult { path, title, snippet, score }
   ↓
 コンテキスト構築（各ファイルの先頭1000文字）
   ↓
-プロンプト構築（Qwen2 ChatML形式）:
-  <|im_start|>system
-  あなたはナレッジベースに基づいて質問に回答するアシスタントです...
-  <|im_end|>
-  <|im_start|>user
-  ## コンテキスト
-  ### ファイル1: /path/to/file
-  (ファイル内容)
-  ## 質問
-  (ユーザーの質問)
-  <|im_end|>
-  <|im_start|>assistant
+プロンプト構築（ChatTemplate に応じた形式）:
+  system メッセージ + コンテキスト + 質問 を組み立て
+    → ChatTemplate::format_prompt() でモデル固有の形式に整形
   ↓
-llama.cpp推論（ストリーミング、max 512トークン）
+llama.cpp推論（ストリーミング、max 512トークン、context_length はモデル設定に従う）
   → Tauri event "chat-token" でトークン単位送信
   ↓
 回答テキスト + 参照元ファイルパス抽出
@@ -141,9 +132,10 @@ RagAnswer { answer, sources }
 ```
 
 **実装**:
-- プロンプト構築: `domain/llm/rag.rs` の `build_rag_prompt()`
+- チャットテンプレート: `domain/llm/chat_template.rs` の `ChatTemplate`（ChatML / Gemma / Llama3）
+- プロンプト構築: `domain/llm/rag.rs` の `build_rag_prompt()`（テンプレートを受け取り整形を委譲）
 - 参照元抽出: `domain/llm/rag.rs` の `extract_sources()`
-- LLM推論: `infra/llama/mod.rs` の `LlamaEngine`（`LlmInference` トレイト実装）
+- LLM推論: `infra/llama/mod.rs` の `LlamaEngine`（`LlmInference` トレイト実装、context_length 可変）
 
 ## 3. コンポーネント設計（実装済み）
 
@@ -206,6 +198,7 @@ src-tauri/src/
 │   │                                 VectorSearcherトレイト, VectorSearchResult
 │   ├── llm/
 │   │   ├── mod.rs                  ← LlmInferenceトレイト, LlmModelInfo, available_models()
+│   │   ├── chat_template.rs        ← ChatTemplate enum, format_prompt()
 │   │   └── rag.rs                  ← ContextChunk, RagAnswer, build_rag_prompt(),
 │   │                                 extract_sources()
 │   └── system/

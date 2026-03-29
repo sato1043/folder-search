@@ -24,6 +24,7 @@ pub fn run() {
                 .unwrap_or_else(|| std::path::PathBuf::from("./models")),
             folder_path: Mutex::new(None),
             watcher: Mutex::new(None),
+            loaded_llm_config: Mutex::new(None),
         })
         .setup(|app| {
             let state = app.state::<AppState>();
