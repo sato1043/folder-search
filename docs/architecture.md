@@ -284,9 +284,58 @@ pub struct AppState {
 }
 ```
 
-## 6. 技術選定の詳細（確定版）
+## 6. 起動シーケンス
 
-### 6.1 全文検索: tantivy 0.25 + lindera 2
+### 6.1 Rust側（setup フック）
+
+```
+1. AppState 初期化（全フィールド None / model_dir 設定）
+2. setup フック実行
+   └─ embeddingモデルがダウンロード済みか確認
+      ├─ DL済み → OnnxEmbeddingGenerator を自動ロード
+      └─ 未DL → スキップ
+3. コマンドハンドラ登録（15コマンド）
+4. WebView 起動 → フロントエンド初期化へ
+```
+
+LLMモデルの自動ロードは未実装。ユーザーが手動でモデルを選択・ロードする必要がある。
+
+### 6.2 フロントエンド初期化（useEffect）
+
+以下の5つのIPCコマンドが**並列**に発火する（依存関係なし）:
+
+```
+isEmbeddingModelReady()      → modelReady 設定
+isLlmReady()                 → llmReady 設定
+listAvailableModels()        → llmModels 設定
+detectSystemInfo()           → systemInfo 設定
+getModelRecommendations()    → recommendations 設定 + best_fit を selectedModel に設定
+```
+
+### 6.3 ユーザー操作トリガー
+
+```
+フォルダ選択
+  → build_index（全文検索インデックス構築 + ファイル監視開始）
+  → modelReady の場合、自動で build_vector_index
+
+Embeddingモデル DL ボタン（indexCount > 0 かつ !modelReady 時のみ表示）
+  → download_embedding_model → ロード → modelReady = true
+  → indexCount > 0 の場合、自動で build_vector_index
+
+LLMモデル取得・ロード ボタン
+  → download_llm_model → load_llm_model（適応的GPUオフロード）
+  → llmReady = true + GPU/CPUステータス表示
+```
+
+### 6.4 注意事項
+
+- `listAvailableModels` と `getModelRecommendations` が並列に走るため、`selectedModel` の初期値設定に競合の可能性がある。`getModelRecommendations` が先に完了した場合、`llmModels` がまだ空で `selectedModel` だけ設定される。現状は `<select>` の `value` が `llmModels` とずれる期間が短いため実害はないが、初期化の依存関係を整理するとより堅牢になる
+- embeddingモデルは setup フックで自動ロードされるが、LLMモデルは自動ロードされない。これは LLMモデルが複数あり、どれをロードすべきか判断が必要なため
+
+## 7. 技術選定の詳細（確定版）
+
+### 7.1 全文検索: tantivy 0.25 + lindera 2
 
 - tantivy: Rust製全文検索エンジン。BM25スコアリング、スニペット生成
 - lindera: IPAdic辞書による日本語形態素解析
@@ -294,7 +343,7 @@ pub struct AppState {
 - スキーマ: path(STRING|STORED), title(TEXT|STORED), body(TEXT|STORED)
 - 全フィールドで`lang_ja`トークナイザを使用
 
-### 6.2 ベクトル検索
+### 7.2 ベクトル検索
 
 - **embeddingモデル**: `intfloat/multilingual-e5-small`（384次元、ONNX形式、約470MB）
   - 94言語以上対応（日本語含む）
@@ -309,7 +358,7 @@ pub struct AppState {
 - **チャンク分割**: 500文字、100文字オーバーラップ
 - **スコア統合**: RRF（Reciprocal Rank Fusion、k=60）
 
-### 6.3 ローカルLLM: llama-cpp-2 0.1.140
+### 7.3 ローカルLLM: llama-cpp-2 0.1.140
 
 - llama.cppのRustバインディング（C++ソースを自動コンパイル）
 - GGUF形式モデルをサポート
@@ -318,7 +367,7 @@ pub struct AppState {
 - コンテキスト長: 2048トークン
 - 最大生成トークン数: 512
 
-### 6.4 利用可能なLLMモデル（プリセット）
+### 7.4 利用可能なLLMモデル（プリセット）
 
 | モデル | サイズ | 推奨VRAM | 用途 |
 |---|---|---|---|
@@ -329,9 +378,9 @@ pub struct AppState {
 
 全モデルがQwen2.5ベースで日本語に対応する。HuggingFaceから動的ダウンロード。
 
-## 7. 永続化
+## 8. 永続化
 
-### 7.1 データ保存場所
+### 8.1 データ保存場所
 
 | データ | 保存場所 | 形式 |
 |---|---|---|
@@ -343,15 +392,15 @@ pub struct AppState {
 `{model_dir}` は実行ファイルと同階層の `models/` ディレクトリ。
 `{app_data}` はTauri APIが提供するプラットフォーム別パス。
 
-### 7.2 未実装の永続化（今後の課題）
+### 8.2 未実装の永続化（今後の課題）
 
 - ベクトルインデックスのディスク永続化（hnsw_rsのhnswioモジュール）
 - アプリ設定のJSON永続化
 - ファイルメタデータのSQLite管理
 
-## 8. テスト構成
+## 9. テスト構成
 
-### 8.1 テスト総数: 72件
+### 9.1 テスト総数: 72件
 
 | カテゴリ | ファイル | 件数 |
 |---|---|---|
@@ -374,7 +423,7 @@ pub struct AppState {
 | Preview | `src/components/search/Preview.test.tsx` | 2 |
 | ChatMessage | `src/components/chat/ChatMessage.test.tsx` | 4 |
 
-### 8.2 E2Eテスト
+### 9.2 E2Eテスト
 
 - **自動**: WebdriverIO v8 + tauri-driver（3件）
   - アプリウィンドウ表示、サイドバー、メインパネル
@@ -383,9 +432,9 @@ pub struct AppState {
   - MET-002: ベクトルインデックス構築
   - MET-003: ハイブリッド検索
 
-## 9. 依存関係（Rust）
+## 10. 依存関係（Rust）
 
-### 9.1 主要クレート
+### 10.1 主要クレート
 
 | クレート | バージョン | 用途 |
 |---|---|---|
@@ -407,7 +456,7 @@ pub struct AppState {
 | thiserror | 2 | エラー型定義 |
 | sysinfo | 0.32 | システムRAM検出 |
 
-### 9.2 ビルド依存
+### 10.2 ビルド依存
 
 | ツール | 用途 |
 |---|---|
@@ -416,9 +465,9 @@ pub struct AppState {
 | webkit2gtk-4.1-dev | Tauri WebView (Linux) |
 | webkit2gtk-driver | E2Eテスト (Linux) |
 
-## 10. ファイル監視（設計メモ）
+## 11. ファイル監視（設計メモ）
 
-### 10.1 概要
+### 11.1 概要
 
 フォルダ内のファイル変更を検知し、全文検索インデックスとベクトルインデックスを自動更新する。
 
@@ -436,25 +485,25 @@ pub struct AppState {
                               フロントエンドに通知（Tauri event）
 ```
 
-### 10.2 差分更新方式
+### 11.2 差分更新方式
 
 - **全文検索**: tantivy の `path` フィールドが `STRING` 型のため、`Term::from_field_text` で個別文書の削除が可能。変更ファイルは削除→再追加で更新する
 - **ベクトル検索**: 既存の `build_vector_index` を再呼び出しする。`VectorCache::compute_diff` でファイル変更を検出し、変更ファイルのみembeddingを再生成する。HNSWインデックスは全体再構築（hnsw_rsに削除APIがないため）
 
-### 10.3 注意事項
+### 11.3 注意事項
 
 - ウォッチャーのコールバックは別スレッドで実行される。AppStateのMutexアクセスでデッドロックに注意する
 - フォルダ再選択時に前のウォッチャーを確実に停止してから新しいウォッチャーを開始する
 - デバウンス中にアプリが終了した場合の未処理イベントは無視してよい
 - WSL2環境ではnotifyのinotifyがホストファイルシステム（/mnt/c/等）の変更を検知できない可能性がある。WSL2ネイティブのファイルシステムでは動作する
 
-## 11. システム情報検出・モデル推奨
+## 12. システム情報検出・モデル推奨
 
-### 11.1 概要
+### 12.1 概要
 
 システムのRAMとGPU情報を検出し、LLMモデルの推奨を自動的に行う。CPU推論時はシステムRAMベース、GPU推論時はVRAMベースで判定する。
 
-### 11.2 検出方式
+### 12.2 検出方式
 
 - **システムRAM**: `sysinfo` クレートで取得（クロスプラットフォーム）
 - **GPU情報**: プラットフォーム別のコマンド実行+パース
@@ -463,7 +512,7 @@ pub struct AppState {
   - Linux: `lspci` + `nvidia-smi`（ベストエフォート）
 - GPU検出は失敗してもエラーにしない（GPU情報なしとして扱う）
 
-### 11.3 推奨ロジック
+### 12.3 推奨ロジック
 
 ```
 利用可能メモリ =
@@ -478,7 +527,7 @@ pub struct AppState {
 best_fit = Recommended の中で最大サイズのモデル
 ```
 
-### 11.4 データフロー
+### 12.4 データフロー
 
 ```
 アプリ起動 / LLMセクション表示
@@ -495,7 +544,7 @@ get_model_recommendations コマンド
   - サイドバーにシステム情報を簡易表示
 ```
 
-### 11.5 GPU推論（フェーズB）
+### 12.5 GPU推論（フェーズB）
 
 #### GPU バックエンド
 
