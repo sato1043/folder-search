@@ -212,17 +212,16 @@ function App() {
       setDownloadStatus("ダウンロード開始...");
       await downloadEmbeddingModel();
       setModelReady(true);
-      setIsDownloading(false);
-      setDownloadStatus("");
-      await refreshModelStorage();
 
       if (indexCount > 0) {
         await triggerBuildVectorIndex();
       }
     } catch (e) {
       setError(String(e));
+    } finally {
       setIsDownloading(false);
       setDownloadStatus("");
+      await refreshModelStorage();
     }
   }, [indexCount, triggerBuildVectorIndex, refreshModelStorage]);
 
@@ -239,13 +238,12 @@ function App() {
       const result = await loadLlmModel(model.filename);
       setLlmLoadResult(result);
       setLlmReady(true);
+    } catch (e) {
+      setError(String(e));
+    } finally {
       setIsLoadingLlm(false);
       setDownloadStatus("");
       await refreshModelStorage();
-    } catch (e) {
-      setError(String(e));
-      setIsLoadingLlm(false);
-      setDownloadStatus("");
     }
   }, [llmModels, selectedModel, refreshModelStorage]);
 
