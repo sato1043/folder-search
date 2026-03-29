@@ -131,7 +131,10 @@ mod tests {
         let prompt = ChatTemplate::Gemma.format_prompt(SYSTEM, USER);
         let user_start = prompt.find("<start_of_turn>user").unwrap();
         let system_pos = prompt.find(SYSTEM).unwrap();
-        assert!(system_pos > user_start, "system は user ターン内に埋め込まれるべき");
+        assert!(
+            system_pos > user_start,
+            "system は user ターン内に埋め込まれるべき"
+        );
     }
 
     #[test]
@@ -179,7 +182,11 @@ mod tests {
     #[test]
     fn test_empty_system_message() {
         // system が空でもパニックしない
-        for template in [ChatTemplate::Chatml, ChatTemplate::Gemma, ChatTemplate::Llama3] {
+        for template in [
+            ChatTemplate::Chatml,
+            ChatTemplate::Gemma,
+            ChatTemplate::Llama3,
+        ] {
             let prompt = template.format_prompt("", USER);
             assert!(prompt.contains(USER));
         }
@@ -187,7 +194,11 @@ mod tests {
 
     #[test]
     fn test_empty_user_message() {
-        for template in [ChatTemplate::Chatml, ChatTemplate::Gemma, ChatTemplate::Llama3] {
+        for template in [
+            ChatTemplate::Chatml,
+            ChatTemplate::Gemma,
+            ChatTemplate::Llama3,
+        ] {
             let prompt = template.format_prompt(SYSTEM, "");
             assert!(prompt.contains(SYSTEM));
         }
@@ -197,7 +208,11 @@ mod tests {
     fn test_multiline_messages() {
         let system = "行1\n行2\n行3";
         let user = "質問行1\n質問行2";
-        for template in [ChatTemplate::Chatml, ChatTemplate::Gemma, ChatTemplate::Llama3] {
+        for template in [
+            ChatTemplate::Chatml,
+            ChatTemplate::Gemma,
+            ChatTemplate::Llama3,
+        ] {
             let prompt = template.format_prompt(system, user);
             assert!(prompt.contains(system));
             assert!(prompt.contains(user));
@@ -210,7 +225,11 @@ mod tests {
 
     #[test]
     fn test_serde_roundtrip() {
-        for template in [ChatTemplate::Chatml, ChatTemplate::Gemma, ChatTemplate::Llama3] {
+        for template in [
+            ChatTemplate::Chatml,
+            ChatTemplate::Gemma,
+            ChatTemplate::Llama3,
+        ] {
             let json = serde_json::to_string(&template).unwrap();
             let deserialized: ChatTemplate = serde_json::from_str(&json).unwrap();
             assert_eq!(template, deserialized);

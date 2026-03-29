@@ -112,7 +112,10 @@ mod tests {
 
         // 最後のチャンクがテキスト末尾を含む
         let last = chunks.last().unwrap();
-        assert!(text.ends_with(&last.text[last.text.len() - 1..]), "末尾が含まれる");
+        assert!(
+            text.ends_with(&last.text[last.text.len() - 1..]),
+            "末尾が含まれる"
+        );
     }
 
     #[test]

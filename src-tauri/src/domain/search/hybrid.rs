@@ -46,16 +46,8 @@ mod tests {
 
     #[test]
     fn test_rrf_basic() {
-        let fulltext = vec![
-            "a.md".to_string(),
-            "b.md".to_string(),
-            "c.md".to_string(),
-        ];
-        let vector = vec![
-            "b.md".to_string(),
-            "a.md".to_string(),
-            "d.md".to_string(),
-        ];
+        let fulltext = vec!["a.md".to_string(), "b.md".to_string(), "c.md".to_string()];
+        let vector = vec!["b.md".to_string(), "a.md".to_string(), "d.md".to_string()];
 
         let results = reciprocal_rank_fusion(&fulltext, &vector, 60.0);
 

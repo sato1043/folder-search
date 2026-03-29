@@ -1,5 +1,6 @@
 use std::num::NonZeroU32;
 use std::pin::pin;
+use std::sync::OnceLock;
 
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
@@ -10,12 +11,14 @@ use llama_cpp_2::sampling::LlamaSampler;
 
 use crate::domain::llm::{estimate_gpu_layers, LlmError, LlmInference};
 
+/// LlamaBackend はプロセス内で一度だけ初期化する
+static LLAMA_BACKEND: OnceLock<LlamaBackend> = OnceLock::new();
+
 /// 全層オフロード失敗時の最初のフォールバック層数
 const FALLBACK_MAX_LAYERS: u32 = 40;
 
 /// llama.cpp による LLM推論エンジン
 pub struct LlamaEngine {
-    backend: LlamaBackend,
     model: LlamaModel,
     /// 実際に使用されたGPUオフロード層数（0 = CPU推論）
     gpu_layers: u32,
@@ -41,12 +44,12 @@ impl LlamaEngine {
         initial_layers: u32,
         context_length: u32,
     ) -> Result<Self, LlmError> {
-        let backend =
-            LlamaBackend::init().map_err(|e| LlmError::ModelLoadError(e.to_string()))?;
+        let backend = LLAMA_BACKEND
+            .get_or_init(|| LlamaBackend::init().expect("LlamaBackend の初期化に失敗"));
 
         let mut layers = initial_layers;
         loop {
-            match Self::try_load_model(&backend, model_path, layers) {
+            match Self::try_load_model(backend, model_path, layers) {
                 Ok(model) => {
                     if layers != initial_layers {
                         eprintln!(
@@ -55,7 +58,6 @@ impl LlamaEngine {
                         );
                     }
                     return Ok(Self {
-                        backend,
                         model,
                         gpu_layers: layers,
                         context_length,
@@ -118,9 +120,12 @@ impl LlmInference for LlamaEngine {
         let ctx_size = NonZeroU32::new(self.context_length).unwrap();
         let ctx_params = LlamaContextParams::default().with_n_ctx(Some(ctx_size));
 
+        let backend = LLAMA_BACKEND
+            .get()
+            .ok_or_else(|| LlmError::InferenceError("バックエンド未初期化".to_string()))?;
         let mut ctx = self
             .model
-            .new_context(&self.backend, ctx_params)
+            .new_context(backend, ctx_params)
             .map_err(|e| LlmError::InferenceError(e.to_string()))?;
 
         // プロンプトをトークン化
@@ -142,10 +147,8 @@ impl LlmInference for LlamaEngine {
             .map_err(|e| LlmError::InferenceError(e.to_string()))?;
 
         // サンプラー設定
-        let mut sampler = LlamaSampler::chain_simple([
-            LlamaSampler::temp(0.7),
-            LlamaSampler::dist(1234),
-        ]);
+        let mut sampler =
+            LlamaSampler::chain_simple([LlamaSampler::temp(0.7), LlamaSampler::dist(1234)]);
 
         // ストリーミング生成ループ
         let mut n_cur = batch.n_tokens();
@@ -315,11 +318,7 @@ mod tests {
         let mut prev = layers;
         while layers > 0 {
             layers = next_layer_count(layers);
-            assert!(
-                layers < prev,
-                "{}→{}: 厳密減少に違反",
-                prev, layers
-            );
+            assert!(layers < prev, "{}→{}: 厳密減少に違反", prev, layers);
             prev = layers;
         }
     }

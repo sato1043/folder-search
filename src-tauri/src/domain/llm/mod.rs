@@ -4,7 +4,12 @@ pub mod rag;
 /// LLM推論のトレイト
 pub trait LlmInference {
     /// テキストを生成する（ストリーミングコールバック付き）
-    fn generate<F>(&mut self, prompt: &str, max_tokens: u32, on_token: F) -> Result<String, LlmError>
+    fn generate<F>(
+        &mut self,
+        prompt: &str,
+        max_tokens: u32,
+        on_token: F,
+    ) -> Result<String, LlmError>
     where
         F: FnMut(&str);
 }
@@ -43,6 +48,13 @@ pub struct LlmModelInfo {
     pub chat_template: ChatTemplate,
     /// コンテキスト長（トークン数）
     pub context_length: u32,
+    /// プリセットモデルか（trueならコード定義、falseならカスタム登録）
+    #[serde(default = "default_is_preset")]
+    pub is_preset: bool,
+}
+
+fn default_is_preset() -> bool {
+    false
 }
 
 /// ダウンロード済みモデルの情報
@@ -63,7 +75,12 @@ pub struct StorageUsage {
     pub total_used_bytes: u64,
     /// ディスク空き容量（バイト）。取得できない場合は0
     pub disk_free_bytes: u64,
+    /// キャッシュ上限（バイト）
+    pub cache_limit_bytes: u64,
 }
+
+/// ダウンロードキャッシュのデフォルト上限（100 GB）
+pub const DEFAULT_CACHE_LIMIT_BYTES: u64 = 100 * 1024 * 1024 * 1024;
 
 /// KVキャッシュ・ワークスペースのオーバーヘッド見積もり（MB）
 const GPU_OVERHEAD_MB: u64 = 512;
@@ -98,51 +115,6 @@ pub fn estimate_gpu_layers(model_size_bytes: u64, vram_mb: u64) -> u32 {
 /// デフォルトのモデルリスト
 pub fn available_models() -> Vec<LlmModelInfo> {
     vec![
-        // --- Qwen2.5 ---
-        LlmModelInfo {
-            name: "Qwen2.5-0.5B-Instruct (Q4_K_M)".to_string(),
-            filename: "qwen2.5-0.5b-instruct-q4_k_m.gguf".to_string(),
-            url: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf".to_string(),
-            size_bytes: 491 * 1024 * 1024,
-            min_vram_mb: 0,
-            params: "0.5B".to_string(),
-            quantization: "Q4_K_M".to_string(),
-            chat_template: ChatTemplate::Chatml,
-            context_length: 32768,
-        },
-        LlmModelInfo {
-            name: "Qwen2.5-1.5B-Instruct (Q4_K_M)".to_string(),
-            filename: "qwen2.5-1.5b-instruct-q4_k_m.gguf".to_string(),
-            url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf".to_string(),
-            size_bytes: 1_120 * 1024 * 1024,
-            min_vram_mb: 2048,
-            params: "1.5B".to_string(),
-            quantization: "Q4_K_M".to_string(),
-            chat_template: ChatTemplate::Chatml,
-            context_length: 32768,
-        },
-        LlmModelInfo {
-            name: "Qwen2.5-7B-Instruct (Q4_K_M)".to_string(),
-            filename: "qwen2.5-7b-instruct-q4_k_m.gguf".to_string(),
-            url: "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf".to_string(),
-            size_bytes: 4_680 * 1024 * 1024,
-            min_vram_mb: 6144,
-            params: "7B".to_string(),
-            quantization: "Q4_K_M".to_string(),
-            chat_template: ChatTemplate::Chatml,
-            context_length: 32768,
-        },
-        LlmModelInfo {
-            name: "Qwen2.5-14B-Instruct (Q4_K_M)".to_string(),
-            filename: "qwen2.5-14b-instruct-q4_k_m.gguf".to_string(),
-            url: "https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/main/qwen2.5-14b-instruct-q4_k_m.gguf".to_string(),
-            size_bytes: 8_990 * 1024 * 1024,
-            min_vram_mb: 12288,
-            params: "14B".to_string(),
-            quantization: "Q4_K_M".to_string(),
-            chat_template: ChatTemplate::Chatml,
-            context_length: 32768,
-        },
         // --- Gemma 3 ---
         LlmModelInfo {
             name: "Gemma 3 1B Instruct (Q4_K_M)".to_string(),
@@ -154,6 +126,7 @@ pub fn available_models() -> Vec<LlmModelInfo> {
             quantization: "Q4_K_M".to_string(),
             chat_template: ChatTemplate::Gemma,
             context_length: 32768,
+            is_preset: true,
         },
         LlmModelInfo {
             name: "Gemma 3 4B Instruct (Q4_K_M)".to_string(),
@@ -165,6 +138,7 @@ pub fn available_models() -> Vec<LlmModelInfo> {
             quantization: "Q4_K_M".to_string(),
             chat_template: ChatTemplate::Gemma,
             context_length: 32768,
+            is_preset: true,
         },
         LlmModelInfo {
             name: "Gemma 3 12B Instruct (Q4_K_M)".to_string(),
@@ -176,6 +150,44 @@ pub fn available_models() -> Vec<LlmModelInfo> {
             quantization: "Q4_K_M".to_string(),
             chat_template: ChatTemplate::Gemma,
             context_length: 32768,
+            is_preset: true,
+        },
+        // --- Llama 3 ---
+        LlmModelInfo {
+            name: "Llama 3.2 1B Instruct (Q4_K_M)".to_string(),
+            filename: "Llama-3.2-1B-Instruct-Q4_K_M.gguf".to_string(),
+            url: "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf".to_string(),
+            size_bytes: 750 * 1024 * 1024,
+            min_vram_mb: 0,
+            params: "1B".to_string(),
+            quantization: "Q4_K_M".to_string(),
+            chat_template: ChatTemplate::Llama3,
+            context_length: 32768,
+            is_preset: true,
+        },
+        LlmModelInfo {
+            name: "Llama 3.2 3B Instruct (Q4_K_M)".to_string(),
+            filename: "Llama-3.2-3B-Instruct-Q4_K_M.gguf".to_string(),
+            url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf".to_string(),
+            size_bytes: 2_020 * 1024 * 1024,
+            min_vram_mb: 3072,
+            params: "3B".to_string(),
+            quantization: "Q4_K_M".to_string(),
+            chat_template: ChatTemplate::Llama3,
+            context_length: 32768,
+            is_preset: true,
+        },
+        LlmModelInfo {
+            name: "Llama 3.1 8B Instruct (Q4_K_M)".to_string(),
+            filename: "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf".to_string(),
+            url: "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf".to_string(),
+            size_bytes: 4_920 * 1024 * 1024,
+            min_vram_mb: 6144,
+            params: "8B".to_string(),
+            quantization: "Q4_K_M".to_string(),
+            chat_template: ChatTemplate::Llama3,
+            context_length: 32768,
+            is_preset: true,
         },
     ]
 }
@@ -183,6 +195,42 @@ pub fn available_models() -> Vec<LlmModelInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_available_models_all_preset() {
+        let models = available_models();
+        assert_eq!(models.len(), 6);
+        for model in &models {
+            assert!(model.is_preset, "{} should be preset", model.name);
+            assert!(!model.name.is_empty());
+            assert!(!model.filename.is_empty());
+            assert!(!model.url.is_empty());
+            assert!(model.size_bytes > 0);
+            assert!(model.context_length > 0);
+        }
+    }
+
+    #[test]
+    fn test_llm_model_info_deserialize_default_is_preset() {
+        let json = r#"{
+            "name": "Test",
+            "filename": "test.gguf",
+            "url": "",
+            "size_bytes": 1000,
+            "min_vram_mb": 0,
+            "params": "",
+            "quantization": "",
+            "chat_template": "chatml",
+            "context_length": 4096
+        }"#;
+        let model: LlmModelInfo = serde_json::from_str(json).unwrap();
+        assert!(!model.is_preset, "is_preset should default to false");
+    }
+
+    #[test]
+    fn test_default_cache_limit() {
+        assert_eq!(DEFAULT_CACHE_LIMIT_BYTES, 100 * 1024 * 1024 * 1024);
+    }
 
     // 1MB = 1024*1024 bytes
     const MB: u64 = 1024 * 1024;
@@ -425,7 +473,9 @@ mod tests {
             assert!(
                 layers >= prev,
                 "VRAM {}MBで{}層 < 前回{}層: 単調性違反",
-                vram, layers, prev
+                vram,
+                layers,
+                prev
             );
             prev = layers;
         }
@@ -441,7 +491,9 @@ mod tests {
             assert!(
                 layers <= prev,
                 "model {}MBで{}層 > 前回{}層: 単調性違反",
-                model_mb, layers, prev
+                model_mb,
+                layers,
+                prev
             );
             prev = layers;
         }

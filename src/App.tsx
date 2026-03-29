@@ -8,6 +8,7 @@ import { SearchBar } from "./components/search/SearchBar";
 import { ResultList } from "./components/search/ResultList";
 import { Preview } from "./components/search/Preview";
 import { ChatMessage } from "./components/chat/ChatMessage";
+import { SettingsDialog } from "./components/settings/SettingsDialog";
 import {
   buildIndex,
   search,
@@ -23,9 +24,14 @@ import {
   chat,
   detectSystemInfo,
   getModelRecommendations,
+  getLoadedModelFilename,
+  getSettings,
+  saveSettings,
   listDownloadedModels,
   deleteModel,
   getStorageUsage,
+  registerCustomModel,
+  unregisterCustomModel,
 } from "./lib/tauri";
 import type {
   SearchResult,
@@ -33,7 +39,6 @@ import type {
   VectorIndexProgress,
   SearchMode,
   LlmModelInfo,
-  LlmLoadResult,
   SystemInfo,
   ModelRecommendation,
   DownloadedModelInfo,
@@ -62,9 +67,9 @@ function App() {
   const [appMode, setAppMode] = useState<AppMode>("search");
   const [llmReady, setLlmReady] = useState(false);
   const [llmModels, setLlmModels] = useState<LlmModelInfo[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>("");
+  const [loadedModelFilename, setLoadedModelFilename] = useState<string | null>(null);
   const [isLoadingLlm, setIsLoadingLlm] = useState(false);
-  const [llmLoadResult, setLlmLoadResult] = useState<LlmLoadResult | null>(null);
+  const [switchingModelFilename, setSwitchingModelFilename] = useState<string | null>(null);
   const [chatAnswer, setChatAnswer] = useState<string | null>(null);
   const [chatSources, setChatSources] = useState<string[]>([]);
   const [isChatting, setIsChatting] = useState(false);
@@ -76,6 +81,9 @@ function App() {
   const [downloadedModels, setDownloadedModels] = useState<DownloadedModelInfo[]>([]);
   const [storageUsage, setStorageUsage] = useState<StorageUsage | null>(null);
 
+  // 設定ダイアログ
+  const [showSettings, setShowSettings] = useState(false);
+
   // 初期化
   useEffect(() => {
     isEmbeddingModelReady()
@@ -84,26 +92,53 @@ function App() {
     isLlmReady()
       .then(setLlmReady)
       .catch(() => setLlmReady(false));
+    getLoadedModelFilename()
+      .then(setLoadedModelFilename)
+      .catch(() => {});
     listAvailableModels()
-      .then((models) => {
-        setLlmModels(models);
-      })
+      .then(setLlmModels)
       .catch(() => {});
     detectSystemInfo()
       .then(setSystemInfo)
       .catch(() => {});
     getModelRecommendations()
-      .then((recs) => {
-        setRecommendations(recs);
-        // best_fitモデルを初期選択する
-        const bestFit = recs.find((r) => r.is_best_fit);
-        if (bestFit) {
-          setSelectedModel(bestFit.filename);
-        }
-      })
+      .then(setRecommendations)
       .catch(() => {});
-    listDownloadedModels().then(setDownloadedModels).catch(() => {});
-    getStorageUsage().then(setStorageUsage).catch(() => {});
+    listDownloadedModels()
+      .then(setDownloadedModels)
+      .catch(() => {});
+    getStorageUsage()
+      .then(setStorageUsage)
+      .catch(() => {});
+
+    // 前回ロードしたモデルの自動ロード
+    (async () => {
+      try {
+        const [settings, models] = await Promise.all([getSettings(), listAvailableModels()]);
+        if (!settings.last_loaded_model) return;
+        const alreadyLoaded = await isLlmReady();
+        if (alreadyLoaded) return;
+        const model = models.find((m) => m.filename === settings.last_loaded_model);
+        if (!model) return;
+        setIsLoadingLlm(true);
+        setSwitchingModelFilename(model.filename);
+        setDownloadStatus("前回のモデルをロード中...");
+        const result = await loadLlmModel(
+          model.filename,
+          model.chat_template,
+          model.context_length,
+        );
+        void result; // GPU情報は将来使用予定
+        setLlmReady(true);
+        setLoadedModelFilename(model.filename);
+      } catch (e) {
+        console.error("LLM自動ロード失敗:", e);
+      } finally {
+        setIsLoadingLlm(false);
+        setSwitchingModelFilename(null);
+        setDownloadStatus("");
+      }
+    })();
   }, []);
 
   // ダウンロード進捗のリスナー
@@ -161,12 +196,15 @@ function App() {
   }, []);
 
   const refreshModelStorage = useCallback(async () => {
-    const [models, usage] = await Promise.all([
-      listDownloadedModels(),
-      getStorageUsage(),
-    ]);
+    const [models, usage] = await Promise.all([listDownloadedModels(), getStorageUsage()]);
     setDownloadedModels(models);
     setStorageUsage(usage);
+  }, []);
+
+  const refreshModelList = useCallback(async () => {
+    const [models, recs] = await Promise.all([listAvailableModels(), getModelRecommendations()]);
+    setLlmModels(models);
+    setRecommendations(recs);
   }, []);
 
   const triggerBuildVectorIndex = useCallback(async () => {
@@ -229,27 +267,65 @@ function App() {
     }
   }, [indexCount, triggerBuildVectorIndex, refreshModelStorage]);
 
-  const handleDownloadAndLoadLlm = useCallback(async () => {
-    const model = llmModels.find((m) => m.filename === selectedModel);
-    if (!model) return;
+  const handleDownloadAndLoadLlm = useCallback(
+    async (filename: string) => {
+      const model = llmModels.find((m) => m.filename === filename);
+      if (!model) return;
 
-    try {
-      setIsLoadingLlm(true);
-      setError(null);
-      setDownloadStatus("LLMモデルダウンロード中...");
-      await downloadLlmModel(model.filename, model.url);
-      setDownloadStatus("モデルロード中...");
-      const result = await loadLlmModel(model.filename, model.chat_template, model.context_length);
-      setLlmLoadResult(result);
-      setLlmReady(true);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setIsLoadingLlm(false);
-      setDownloadStatus("");
-      await refreshModelStorage();
-    }
-  }, [llmModels, selectedModel, refreshModelStorage]);
+      try {
+        setIsLoadingLlm(true);
+        setSwitchingModelFilename(model.filename);
+        setError(null);
+        setDownloadStatus("LLMモデルダウンロード中...");
+        // 状態変更をブラウザに描画させてから処理を続行
+        await new Promise((r) => requestAnimationFrame(r));
+        const evicted = await downloadLlmModel(model.filename, model.url, model.size_bytes);
+        if (evicted.length > 0) {
+          setError(`キャッシュ上限超過のため自動削除: ${evicted.join(", ")}`);
+        }
+        setDownloadStatus("モデルロード中...");
+        const result = await loadLlmModel(
+          model.filename,
+          model.chat_template,
+          model.context_length,
+        );
+        void result; // GPU情報は将来使用予定
+        setLlmReady(true);
+        setLoadedModelFilename(model.filename);
+        // 設定に前回ロードしたモデルを保存
+        const currentSettings = await getSettings();
+        await saveSettings({ ...currentSettings, last_loaded_model: model.filename });
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setIsLoadingLlm(false);
+        setSwitchingModelFilename(null);
+        setDownloadStatus("");
+        await refreshModelStorage();
+      }
+    },
+    [llmModels, refreshModelStorage],
+  );
+
+  const handleDownloadModel = useCallback(
+    async (filename: string) => {
+      const model = llmModels.find((m) => m.filename === filename);
+      if (!model) return;
+      try {
+        setIsDownloading(true);
+        setError(null);
+        setDownloadStatus("ダウンロード中...");
+        await downloadLlmModel(model.filename, model.url, model.size_bytes);
+        await refreshModelStorage();
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setIsDownloading(false);
+        setDownloadStatus("");
+      }
+    },
+    [llmModels, refreshModelStorage],
+  );
 
   const handleDeleteModel = useCallback(
     async (filename: string) => {
@@ -327,10 +403,60 @@ function App() {
 
   return (
     <div className="app">
+      <SettingsDialog
+        isOpen={showSettings}
+        diskFreeBytes={storageUsage?.disk_free_bytes ?? 0}
+        systemInfo={systemInfo}
+        llmModels={llmModels}
+        loadedModelFilename={loadedModelFilename}
+        recommendations={recommendations}
+        downloadedModels={downloadedModels}
+        storageUsage={storageUsage}
+        isLoadingLlm={isLoadingLlm}
+        switchingModelFilename={switchingModelFilename}
+        isDownloading={isDownloading}
+        downloadStatus={downloadStatus}
+        onDownloadAndLoadLlm={handleDownloadAndLoadLlm}
+        onDownloadModel={handleDownloadModel}
+        onDeleteModel={handleDeleteModel}
+        onRegisterCustomModel={async (model) => {
+          try {
+            setError(null);
+            await registerCustomModel(model);
+            await refreshModelList();
+          } catch (e) {
+            setError(String(e));
+          }
+        }}
+        onUnregisterCustomModel={async (filename) => {
+          try {
+            setError(null);
+            await unregisterCustomModel(filename);
+            await refreshModelList();
+          } catch (e) {
+            setError(String(e));
+          }
+        }}
+        onClose={() => {
+          setShowSettings(false);
+          refreshModelStorage();
+        }}
+      />
+      {isLoadingLlm && !showSettings && (
+        <div className="loading-overlay">
+          <div className="loading-spinner" />
+          <p className="loading-text">LLMモデルをロード中...</p>
+        </div>
+      )}
       <Sidebar>
-        <button onClick={handleSelectFolder} disabled={isIndexing || isBuildingVector}>
-          フォルダを選択
-        </button>
+        <div className="sidebar-header">
+          <button onClick={handleSelectFolder} disabled={isIndexing || isBuildingVector}>
+            フォルダを選択
+          </button>
+          <button className="settings-icon-btn" onClick={() => setShowSettings(true)} title="設定">
+            &#9881;
+          </button>
+        </div>
         {folderPath && <p className="folder-path">{folderPath}</p>}
         {indexCount > 0 && <p className="index-count">{indexCount} 件のファイル</p>}
 
@@ -342,101 +468,18 @@ function App() {
           </button>
         )}
 
-        {isBuildingVector && <p className="status-ok">ベクトルインデックス: 構築中{vectorProgress && ` ${vectorProgress}`}</p>}
-        {!isBuildingVector && vectorChunkCount > 0 && <p className="status-ok">ベクトルインデックス: {vectorChunkCount} チャンク登録済み</p>}
+        {isBuildingVector && (
+          <p className="status-ok">
+            ベクトルインデックス: 構築中{vectorProgress && ` ${vectorProgress}`}
+          </p>
+        )}
+        {!isBuildingVector && vectorChunkCount > 0 && (
+          <p className="status-ok">ベクトルインデックス: {vectorChunkCount} チャンク登録済み</p>
+        )}
 
         <hr className="sidebar-divider" />
 
-        <div className="llm-section">
-          {systemInfo && (
-            <p className="system-info">
-              RAM: {Math.round(systemInfo.total_ram_mb / 1024)} GB
-              {systemInfo.gpus.length > 0 && (
-                <> | GPU: {systemInfo.gpus.map((g) =>
-                  g.vram_mb > 0 ? `${g.name} (${Math.round(g.vram_mb / 1024)} GB)` : g.name
-                ).join(", ")}</>
-              )}
-            </p>
-          )}
-          <select
-            value={selectedModel}
-            onChange={(e) => setSelectedModel(e.target.value)}
-            disabled={isLoadingLlm}
-          >
-            {llmModels.map((m) => {
-              const rec = recommendations.find((r) => r.filename === m.filename);
-              const dl = downloadedModels.find((d) => d.filename === m.filename);
-              const badge = rec
-                ? rec.is_best_fit
-                  ? "[最適] "
-                  : rec.status === "Warning"
-                    ? "[注意] "
-                    : rec.status === "TooLarge"
-                      ? "[非推奨] "
-                      : ""
-                : "";
-              const dlMark = dl ? "● " : "○ ";
-              return (
-                <option key={m.filename} value={m.filename}>
-                  {dlMark}{badge}{m.name}
-                </option>
-              );
-            })}
-          </select>
-          {recommendations.find((r) => r.filename === selectedModel) && (
-            <p className={`model-recommendation ${recommendations.find((r) => r.filename === selectedModel)!.status.toLowerCase()}`}>
-              {recommendations.find((r) => r.filename === selectedModel)!.reason}
-            </p>
-          )}
-          <button onClick={handleDownloadAndLoadLlm} disabled={isLoadingLlm || !selectedModel}>
-            {isLoadingLlm ? "準備中..." : llmReady ? "モデル切替" : "LLMモデル取得・ロード"}
-          </button>
-          {llmReady && (
-            <p className="status-ok">
-              LLMモデル: 準備完了
-              {llmLoadResult && (
-                llmLoadResult.gpu_active
-                  ? ` (GPU: ${llmLoadResult.gpu_layers}層)`
-                  : " (CPU)"
-              )}
-            </p>
-          )}
-          {downloadedModels.filter((d) => !d.is_embedding).length > 0 && (
-            <div className="downloaded-models">
-              <p className="section-label">DL済みモデル:</p>
-              {downloadedModels
-                .filter((d) => !d.is_embedding)
-                .map((d) => (
-                  <div key={d.filename} className="downloaded-model-item">
-                    <span className="model-filename" title={d.filename}>
-                      {d.filename.replace(/\.gguf$/, "")}
-                    </span>
-                    <span className="model-size">
-                      {(d.size_bytes / (1024 * 1024 * 1024)).toFixed(1)} GB
-                    </span>
-                    <button
-                      className="delete-btn"
-                      onClick={() => handleDeleteModel(d.filename)}
-                      disabled={isLoadingLlm}
-                      title="削除"
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-            </div>
-          )}
-          {storageUsage && (
-            <p className="storage-usage">
-              モデル合計: {(storageUsage.total_used_bytes / (1024 * 1024 * 1024)).toFixed(1)} GB
-              {storageUsage.disk_free_bytes > 0 && (
-                <> / 空き: {(storageUsage.disk_free_bytes / (1024 * 1024 * 1024)).toFixed(0)} GB</>
-              )}
-            </p>
-          )}
-        </div>
-
-        {(isDownloading || isLoadingLlm) && <p className="progress-text">{downloadStatus}</p>}
+        {isDownloading && <p className="progress-text">{downloadStatus}</p>}
 
         <hr className="sidebar-divider" />
 
@@ -493,7 +536,7 @@ function App() {
       <MainPanel>
         {appMode === "search" ? (
           <>
-            <SearchBar onSearch={handleSearch} disabled={indexCount === 0} />
+            <SearchBar onSearch={handleSearch} disabled={indexCount === 0 || isLoadingLlm} />
             {error && <p className="error-message">{error}</p>}
             <div className="content-area">
               <ResultList results={results} onSelect={handleSelectResult} />

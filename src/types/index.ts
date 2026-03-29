@@ -53,6 +53,7 @@ export type LlmModelInfo = {
   quantization: string;
   chat_template: ChatTemplateType;
   context_length: number;
+  is_preset: boolean;
 };
 
 /** RAG回答結果 */
@@ -98,8 +99,16 @@ export type DownloadedModelInfo = {
   is_embedding: boolean;
 };
 
+/** アプリ設定 */
+export type AppSettings = {
+  cache_limit_bytes: number;
+  last_loaded_model: string | null;
+  disabled_models: string[];
+};
+
 /** モデルストレージ使用状況 */
 export type StorageUsage = {
   total_used_bytes: number;
   disk_free_bytes: number;
+  cache_limit_bytes: number;
 };

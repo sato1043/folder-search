@@ -2,8 +2,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use notify_debouncer_mini::{new_debouncer, DebouncedEventKind, Debouncer};
 use notify::RecommendedWatcher;
+use notify_debouncer_mini::{new_debouncer, DebouncedEventKind, Debouncer};
 
 /// ファイル監視を行うウォッチャー
 pub struct FileWatcher {
@@ -61,10 +61,7 @@ impl FileWatcher {
 
         debouncer
             .watcher()
-            .watch(
-                Path::new(folder_path),
-                notify::RecursiveMode::Recursive,
-            )
+            .watch(Path::new(folder_path), notify::RecursiveMode::Recursive)
             .map_err(|e| format!("ファイル監視開始失敗: {}", e))?;
 
         Ok(Self {

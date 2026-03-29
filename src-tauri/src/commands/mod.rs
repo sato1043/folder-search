@@ -3,18 +3,21 @@ use std::sync::Mutex;
 
 use tauri::{Emitter, State};
 
+use crate::domain::config::AppSettings;
 use crate::domain::embedding::{EmbeddingGenerator, VectorSearcher};
 use crate::domain::indexer::chunker::split_into_chunks;
-use crate::domain::indexer::{Indexer, IndexStatus};
+use crate::domain::indexer::{IndexStatus, Indexer};
+use crate::domain::llm::chat_template::ChatTemplate;
 use crate::domain::llm::rag::{build_rag_prompt, extract_sources, ContextChunk, RagAnswer};
-use crate::domain::llm::{available_models, DownloadedModelInfo, LlmInference, LlmModelInfo, StorageUsage};
+use crate::domain::llm::{DownloadedModelInfo, LlmInference, LlmModelInfo, StorageUsage};
 use crate::domain::search::hybrid::{reciprocal_rank_fusion, HybridSearchResult};
 use crate::domain::search::{FulltextSearcher, SearchResult};
-use crate::domain::llm::chat_template::ChatTemplate;
 use crate::domain::system::{recommend_models, ModelRecommendation, SystemInfo};
+use crate::infra::config::SettingsStore;
 use crate::infra::hnsw::HnswVectorIndex;
 use crate::infra::llama::LlamaEngine;
 use crate::infra::model;
+use crate::infra::model_registry::ModelRegistry;
 use crate::infra::onnx::OnnxEmbeddingGenerator;
 use crate::infra::tantivy::TantivySearchEngine;
 use crate::infra::vector_cache::VectorCache;
@@ -39,6 +42,8 @@ pub struct AppState {
     pub folder_path: Mutex<Option<String>>,
     pub watcher: Mutex<Option<FileWatcher>>,
     pub loaded_llm_config: Mutex<Option<LoadedLlmConfig>>,
+    pub model_registry: ModelRegistry,
+    pub settings_store: SettingsStore,
 }
 
 /// 全文検索インデックスを構築する
@@ -55,8 +60,8 @@ pub fn build_index(
         *watcher_guard = None;
     }
 
-    let mut engine =
-        TantivySearchEngine::new(&index_path).map_err(|e| format!("インデックス作成失敗: {}", e))?;
+    let mut engine = TantivySearchEngine::new(&index_path)
+        .map_err(|e| format!("インデックス作成失敗: {}", e))?;
 
     let count = engine
         .index_folder(&folder_path)
@@ -110,7 +115,11 @@ pub fn build_index(
             let generator = model_guard.as_mut()?;
 
             match build_vector_index_incremental_inner(
-                &cache, &folder_path, &diff, cached, generator,
+                &cache,
+                &folder_path,
+                &diff,
+                cached,
+                generator,
             ) {
                 Ok((vector_index, total)) => {
                     if let Ok(mut guard) = state.vector_index.lock() {
@@ -263,7 +272,13 @@ pub fn build_vector_index(
         if d.has_changes() {
             if let Ok(cached) = cache.load(&folder_path) {
                 return build_vector_index_incremental(
-                    &app, &cache, &folder_path, d, cached, generator, &state,
+                    &app,
+                    &cache,
+                    &folder_path,
+                    d,
+                    cached,
+                    generator,
+                    &state,
                 );
             }
         }
@@ -281,8 +296,8 @@ fn build_vector_index_incremental_inner(
     cached: crate::infra::vector_cache::CachedEmbeddings,
     generator: &mut OnnxEmbeddingGenerator,
 ) -> Result<(HnswVectorIndex, u64), String> {
-    use std::collections::HashSet;
     use crate::domain::embedding::EmbeddingGenerator;
+    use std::collections::HashSet;
 
     let changed_files: HashSet<&str> = diff
         .modified
@@ -409,12 +424,7 @@ fn build_vector_index_full(
             Ok(content) => content,
             Err(_) => continue,
         };
-        let chunks = split_into_chunks(
-            &path.to_string_lossy(),
-            &body,
-            500,
-            100,
-        );
+        let chunks = split_into_chunks(&path.to_string_lossy(), &body, 500, 100);
         all_chunks.extend(chunks);
     }
 
@@ -481,7 +491,9 @@ pub fn hybrid_search(
                 let query_embedding = generator
                     .generate(&query_with_prefix)
                     .map_err(|e| format!("クエリembedding生成失敗: {}", e))?;
-                index.search_nearest(&query_embedding, limit).unwrap_or_default()
+                index
+                    .search_nearest(&query_embedding, limit)
+                    .unwrap_or_default()
             }
             _ => Vec::new(),
         }
@@ -489,7 +501,10 @@ pub fn hybrid_search(
 
     // RRFでスコア統合
     let fulltext_paths: Vec<String> = fulltext_results.iter().map(|r| r.path.clone()).collect();
-    let vector_paths: Vec<String> = vector_results.iter().map(|r| r.source_path.clone()).collect();
+    let vector_paths: Vec<String> = vector_results
+        .iter()
+        .map(|r| r.source_path.clone())
+        .collect();
     let ranked = reciprocal_rank_fusion(&fulltext_paths, &vector_paths, 60.0);
 
     // 結果を構築（snippetは全文検索結果を優先、なければベクトル検索のチャンクテキスト）
@@ -534,36 +549,56 @@ pub fn hybrid_search(
     Ok(results)
 }
 
-/// 利用可能なLLMモデル一覧を返す
+/// 利用可能なLLMモデル一覧を返す（プリセット + カスタム）
 #[tauri::command]
-pub fn list_available_models() -> Vec<LlmModelInfo> {
-    available_models()
+pub fn list_available_models(state: State<'_, AppState>) -> Vec<LlmModelInfo> {
+    state.model_registry.all_models()
 }
 
-/// LLMモデルをダウンロードする
+/// LLMモデルをダウンロードする（サイズチェック + LRUエビクション付き）
 #[tauri::command]
 pub async fn download_llm_model(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     filename: String,
     url: String,
-) -> Result<(), String> {
+    size_bytes: u64,
+) -> Result<Vec<String>, String> {
     let model_dir = state.model_dir.clone();
     let dest = model_dir.join(&filename);
 
     if dest.exists() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
-    std::fs::create_dir_all(&model_dir)
-        .map_err(|e| format!("ディレクトリ作成失敗: {}", e))?;
+    // ダウンロード前サイズチェック
+    let cache_limit = state.settings_store.load().cache_limit_bytes;
+    model::check_can_download(size_bytes, cache_limit)?;
+
+    std::fs::create_dir_all(&model_dir).map_err(|e| format!("ディレクトリ作成失敗: {}", e))?;
 
     model::download_file_with_progress(&url, &dest, |progress| {
         let _ = app.emit("download-progress", progress);
     })
     .await?;
 
-    Ok(())
+    // ダウンロード後LRUエビクション
+    let loaded_llm = {
+        let config_guard = state.loaded_llm_config.lock().map_err(|e| e.to_string())?;
+        config_guard.as_ref().map(|c| c.filename.clone())
+    };
+    let embedding_loaded = {
+        let guard = state.embedding_model.lock().map_err(|e| e.to_string())?;
+        guard.is_some()
+    };
+    let evicted = model::evict_lru(
+        &model_dir,
+        cache_limit,
+        loaded_llm.as_deref(),
+        embedding_loaded,
+    );
+
+    Ok(evicted)
 }
 
 /// LLMモデルのロード結果
@@ -575,9 +610,9 @@ pub struct LlmLoadResult {
     pub gpu_layers: u32,
 }
 
-/// LLMモデルをロードする
+/// LLMモデルをロードする（非同期: メインスレッドをブロックしない）
 #[tauri::command]
-pub fn load_llm_model(
+pub async fn load_llm_model(
     filename: String,
     chat_template: String,
     context_length: u32,
@@ -585,7 +620,10 @@ pub fn load_llm_model(
 ) -> Result<LlmLoadResult, String> {
     let model_path = state.model_dir.join(&filename);
     if !model_path.exists() {
-        return Err(format!("モデルファイルが見つからない: {}", model_path.display()));
+        return Err(format!(
+            "モデルファイルが見つからない: {}",
+            model_path.display()
+        ));
     }
 
     // chat_template 文字列をデシリアライズ
@@ -593,26 +631,32 @@ pub fn load_llm_model(
         .map_err(|_| format!("不明なチャットテンプレート: {}", chat_template))?;
 
     // モデルファイルサイズを取得
-    let model_size_bytes = std::fs::metadata(&model_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let model_size_bytes = std::fs::metadata(&model_path).map(|m| m.len()).unwrap_or(0);
 
     // GPU VRAMを取得（最大VRAMを使用）
     let system_info = crate::infra::system::detect_system_info();
-    let vram_mb = system_info.gpus.iter().map(|g| g.vram_mb).max().unwrap_or(0);
+    let vram_mb = system_info
+        .gpus
+        .iter()
+        .map(|g| g.vram_mb)
+        .max()
+        .unwrap_or(0);
 
-    let engine = LlamaEngine::new(
-        model_path.to_str().unwrap_or(""),
-        model_size_bytes,
-        vram_mb,
-        context_length,
-    )
-    .map_err(|e| format!("モデルロード失敗: {}", e))?;
+    let model_path_str = model_path.to_str().unwrap_or("").to_string();
 
-    let result = LlmLoadResult {
-        gpu_active: engine.is_gpu_active(),
-        gpu_layers: engine.gpu_layers(),
-    };
+    // 重い処理をブロッキングスレッドで実行（メインスレッドを解放）
+    let (engine, result) = tokio::task::spawn_blocking(move || {
+        let engine = LlamaEngine::new(&model_path_str, model_size_bytes, vram_mb, context_length)
+            .map_err(|e| format!("モデルロード失敗: {}", e))?;
+
+        let result = LlmLoadResult {
+            gpu_active: engine.is_gpu_active(),
+            gpu_layers: engine.gpu_layers(),
+        };
+        Ok::<_, String>((engine, result))
+    })
+    .await
+    .map_err(|e| format!("タスク実行失敗: {}", e))??;
 
     // ロード済みモデル設定を保存
     {
@@ -638,6 +682,16 @@ pub fn is_llm_ready(state: State<'_, AppState>) -> bool {
         .lock()
         .map(|g| g.is_some())
         .unwrap_or(false)
+}
+
+/// ロード済みLLMモデルのファイル名を返す（未ロード時はnull）
+#[tauri::command]
+pub fn get_loaded_model_filename(state: State<'_, AppState>) -> Option<String> {
+    state
+        .loaded_llm_config
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|c| c.filename.clone()))
 }
 
 /// RAG質問応答（ストリーミング）
@@ -669,7 +723,9 @@ pub fn chat(
                     let query_embedding = generator
                         .generate(&query_with_prefix)
                         .map_err(|e| format!("embedding生成失敗: {}", e))?;
-                    index.search_nearest(&query_embedding, 5).unwrap_or_default()
+                    index
+                        .search_nearest(&query_embedding, 5)
+                        .unwrap_or_default()
                 }
                 _ => Vec::new(),
             }
@@ -677,8 +733,10 @@ pub fn chat(
 
         // RRFで統合してトップ5のファイルを取得
         let fulltext_paths: Vec<String> = fulltext_results.iter().map(|r| r.path.clone()).collect();
-        let vector_paths: Vec<String> =
-            vector_results.iter().map(|r| r.source_path.clone()).collect();
+        let vector_paths: Vec<String> = vector_results
+            .iter()
+            .map(|r| r.source_path.clone())
+            .collect();
         let ranked = reciprocal_rank_fusion(&fulltext_paths, &vector_paths, 60.0);
 
         // コンテキストチャンクを構築
@@ -738,9 +796,9 @@ pub fn detect_system_info() -> SystemInfo {
 
 /// システム情報に基づくモデル推奨リストを返す
 #[tauri::command]
-pub fn get_model_recommendations() -> Vec<ModelRecommendation> {
+pub fn get_model_recommendations(state: State<'_, AppState>) -> Vec<ModelRecommendation> {
     let system = crate::infra::system::detect_system_info();
-    let models = available_models();
+    let models = state.model_registry.all_models();
     recommend_models(&models, &system)
 }
 
@@ -752,12 +810,9 @@ pub fn list_downloaded_models(state: State<'_, AppState>) -> Vec<DownloadedModel
 
 /// モデルファイルを削除する
 ///
-/// ロード中のLLMモデルと同名のファイルは削除を拒否する
+/// ロード中のモデル（LLM・embedding）の削除は拒否する
 #[tauri::command]
-pub fn delete_model(
-    filename: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub fn delete_model(filename: String, state: State<'_, AppState>) -> Result<(), String> {
     // embeddingモデルがロード中の場合、embedding関連ファイルの削除を拒否
     {
         let guard = state.embedding_model.lock().map_err(|e| e.to_string())?;
@@ -766,9 +821,15 @@ pub fn delete_model(
         }
     }
 
-    // 現在ロード中のLLMモデルかどうかは直接判定できないため、
-    // LLMエンジンがロード済みの場合にGGUFファイル削除を警告なしで許可する
-    // （フロントエンド側でUI上のガードを行う）
+    // ロード中のLLMモデルの削除を拒否
+    {
+        let config_guard = state.loaded_llm_config.lock().map_err(|e| e.to_string())?;
+        if let Some(config) = config_guard.as_ref() {
+            if config.filename == filename {
+                return Err("ロード中のLLMモデルは削除できない".to_string());
+            }
+        }
+    }
 
     model::delete_model_file(&state.model_dir, &filename)
 }
@@ -776,5 +837,52 @@ pub fn delete_model(
 /// モデルストレージの使用状況を返す
 #[tauri::command]
 pub fn get_storage_usage(state: State<'_, AppState>) -> StorageUsage {
-    model::get_storage_usage(&state.model_dir)
+    let mut usage = model::get_storage_usage(&state.model_dir);
+    usage.cache_limit_bytes = state.settings_store.load().cache_limit_bytes;
+    usage
+}
+
+/// カスタムモデルを登録する
+#[tauri::command]
+pub fn register_custom_model(
+    model: LlmModelInfo,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.model_registry.add_model(model)
+}
+
+/// カスタムモデルの登録を解除する（DL済みファイルは保持）
+#[tauri::command]
+pub fn unregister_custom_model(filename: String, state: State<'_, AppState>) -> Result<(), String> {
+    state.model_registry.remove_model(&filename)
+}
+
+/// 現在の設定を返す
+#[tauri::command]
+pub fn get_settings(state: State<'_, AppState>) -> AppSettings {
+    state.settings_store.load()
+}
+
+/// 設定を保存する
+#[tauri::command]
+pub fn save_settings(settings: AppSettings, state: State<'_, AppState>) -> Result<(), String> {
+    state.settings_store.save(&settings)
+}
+
+/// ロード中モデル以外の全キャッシュを削除する
+#[tauri::command]
+pub fn clear_model_cache(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let loaded_llm = {
+        let config_guard = state.loaded_llm_config.lock().map_err(|e| e.to_string())?;
+        config_guard.as_ref().map(|c| c.filename.clone())
+    };
+    let embedding_loaded = {
+        let guard = state.embedding_model.lock().map_err(|e| e.to_string())?;
+        guard.is_some()
+    };
+    Ok(model::clear_all_cache(
+        &state.model_dir,
+        loaded_llm.as_deref(),
+        embedding_loaded,
+    ))
 }

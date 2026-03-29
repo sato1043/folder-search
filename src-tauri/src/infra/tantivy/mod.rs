@@ -40,14 +40,13 @@ impl TantivySearchEngine {
         let directory = tantivy::directory::MmapDirectory::open(dir)
             .map_err(|e| IndexError::CreateError(e.to_string()))?;
 
-        let index = if Index::exists(&directory)
-            .map_err(|e| IndexError::CreateError(e.to_string()))?
-        {
-            Index::open(directory).map_err(|e| IndexError::CreateError(e.to_string()))?
-        } else {
-            Index::create(directory, schema.clone(), tantivy::IndexSettings::default())
-                .map_err(|e| IndexError::CreateError(e.to_string()))?
-        };
+        let index =
+            if Index::exists(&directory).map_err(|e| IndexError::CreateError(e.to_string()))? {
+                Index::open(directory).map_err(|e| IndexError::CreateError(e.to_string()))?
+            } else {
+                Index::create(directory, schema.clone(), tantivy::IndexSettings::default())
+                    .map_err(|e| IndexError::CreateError(e.to_string()))?
+            };
 
         Self::register_tokenizer(&index)?;
 
@@ -94,10 +93,7 @@ impl TantivySearchEngine {
             .map_err(|e| IndexError::CommitError(e.to_string()))?;
 
         let mut count = 0u64;
-        for entry in WalkDir::new(folder_path)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
+        for entry in WalkDir::new(folder_path).into_iter().filter_map(|e| e.ok()) {
             let path = entry.path();
             if !path.is_file() {
                 continue;
@@ -316,9 +312,8 @@ impl FulltextSearcher for TantivySearchEngine {
             .search(&parsed_query, &TopDocs::with_limit(limit))
             .map_err(|e| SearchError::InternalError(e.to_string()))?;
 
-        let snippet_generator =
-            SnippetGenerator::create(&searcher, &parsed_query, self.body_field)
-                .map_err(|e: tantivy::TantivyError| SearchError::InternalError(e.to_string()))?;
+        let snippet_generator = SnippetGenerator::create(&searcher, &parsed_query, self.body_field)
+            .map_err(|e: tantivy::TantivyError| SearchError::InternalError(e.to_string()))?;
 
         let mut results = Vec::new();
         for (score, doc_address) in top_docs {
@@ -425,7 +420,10 @@ mod tests {
     fn test_index_status() {
         let engine = create_test_engine();
         let status = engine.status();
-        assert_eq!(status.file_count, 3, "3件のドキュメントがインデックスされている");
+        assert_eq!(
+            status.file_count, 3,
+            "3件のドキュメントがインデックスされている"
+        );
         assert!(status.is_ready);
     }
 
@@ -517,11 +515,7 @@ mod tests {
         let folder_path = temp_dir.path();
 
         // テスト用ファイルを作成
-        std::fs::write(
-            folder_path.join("test1.md"),
-            "Rustプログラミングの基礎",
-        )
-        .unwrap();
+        std::fs::write(folder_path.join("test1.md"), "Rustプログラミングの基礎").unwrap();
         std::fs::write(
             folder_path.join("test2.txt"),
             "TypeScriptによるフロントエンド開発",
@@ -534,9 +528,7 @@ mod tests {
         .unwrap();
 
         let mut engine = TantivySearchEngine::new_in_ram().unwrap();
-        let count = engine
-            .index_folder(folder_path.to_str().unwrap())
-            .unwrap();
+        let count = engine.index_folder(folder_path.to_str().unwrap()).unwrap();
 
         assert_eq!(count, 2, ".mdと.txtのみインデックスされる");
 

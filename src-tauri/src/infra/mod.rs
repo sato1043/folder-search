@@ -1,6 +1,8 @@
+pub mod config;
 pub mod hnsw;
 pub mod llama;
 pub mod model;
+pub mod model_registry;
 pub mod onnx;
 pub mod system;
 pub mod tantivy;

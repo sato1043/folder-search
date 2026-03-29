@@ -188,8 +188,8 @@ impl VectorCache {
         let cache_dir = self.cache_dir_for(folder_path);
         let embeddings_path = cache_dir.join("embeddings.bin");
 
-        let data =
-            std::fs::read(&embeddings_path).map_err(|e| format!("キャッシュ読み込み失敗: {}", e))?;
+        let data = std::fs::read(&embeddings_path)
+            .map_err(|e| format!("キャッシュ読み込み失敗: {}", e))?;
 
         bincode::deserialize(&data).map_err(|e| format!("キャッシュデシリアライズ失敗: {}", e))
     }
@@ -209,8 +209,8 @@ impl VectorCache {
             metas: metas.to_vec(),
             embeddings: embeddings.to_vec(),
         };
-        let bin =
-            bincode::serialize(&cached).map_err(|e| format!("キャッシュシリアライズ失敗: {}", e))?;
+        let bin = bincode::serialize(&cached)
+            .map_err(|e| format!("キャッシュシリアライズ失敗: {}", e))?;
         std::fs::write(cache_dir.join("embeddings.bin"), bin)
             .map_err(|e| format!("キャッシュ書き込み失敗: {}", e))?;
 
@@ -320,9 +320,7 @@ mod tests {
         }
 
         let folder_path = folder_dir.path().to_str().unwrap();
-        cache
-            .save(folder_path, &[], &[])
-            .unwrap();
+        cache.save(folder_path, &[], &[]).unwrap();
 
         // ファイルを追加
         let new_file = folder_dir.path().join("new.txt");

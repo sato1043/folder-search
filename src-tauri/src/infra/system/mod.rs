@@ -35,7 +35,13 @@ fn detect_gpus() -> Vec<GpuInfo> {
 #[cfg(target_os = "windows")]
 fn detect_gpus_platform() -> Result<Vec<GpuInfo>, String> {
     let output = Command::new("wmic")
-        .args(["path", "win32_VideoController", "get", "Name,AdapterRAM", "/format:csv"])
+        .args([
+            "path",
+            "win32_VideoController",
+            "get",
+            "Name,AdapterRAM",
+            "/format:csv",
+        ])
         .output()
         .map_err(|e| format!("wmic実行失敗: {}", e))?;
 

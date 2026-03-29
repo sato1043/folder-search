@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { SearchResult, HybridSearchResult, IndexStatus } from "../types";
 import type {
+  AppSettings,
   LlmModelInfo,
   RagAnswer,
   SystemInfo,
@@ -49,8 +50,12 @@ export async function listAvailableModels(): Promise<LlmModelInfo[]> {
   return invoke<LlmModelInfo[]>("list_available_models");
 }
 
-export async function downloadLlmModel(filename: string, url: string): Promise<void> {
-  return invoke<void>("download_llm_model", { filename, url });
+export async function downloadLlmModel(
+  filename: string,
+  url: string,
+  sizeBytes: number,
+): Promise<string[]> {
+  return invoke<string[]>("download_llm_model", { filename, url, sizeBytes });
 }
 
 export async function loadLlmModel(
@@ -67,6 +72,10 @@ export async function loadLlmModel(
 
 export async function isLlmReady(): Promise<boolean> {
   return invoke<boolean>("is_llm_ready");
+}
+
+export async function getLoadedModelFilename(): Promise<string | null> {
+  return invoke<string | null>("get_loaded_model_filename");
 }
 
 export async function chat(question: string): Promise<RagAnswer> {
@@ -91,4 +100,24 @@ export async function deleteModel(filename: string): Promise<void> {
 
 export async function getStorageUsage(): Promise<StorageUsage> {
   return invoke<StorageUsage>("get_storage_usage");
+}
+
+export async function getSettings(): Promise<AppSettings> {
+  return invoke<AppSettings>("get_settings");
+}
+
+export async function saveSettings(settings: AppSettings): Promise<void> {
+  return invoke<void>("save_settings", { settings });
+}
+
+export async function clearModelCache(): Promise<string[]> {
+  return invoke<string[]>("clear_model_cache");
+}
+
+export async function registerCustomModel(model: LlmModelInfo): Promise<void> {
+  return invoke<void>("register_custom_model", { model });
+}
+
+export async function unregisterCustomModel(filename: string): Promise<void> {
+  return invoke<void>("unregister_custom_model", { filename });
 }

@@ -130,7 +130,11 @@ mod tests {
 
     #[test]
     fn test_build_rag_prompt_contains_system_message() {
-        for template in [ChatTemplate::Chatml, ChatTemplate::Gemma, ChatTemplate::Llama3] {
+        for template in [
+            ChatTemplate::Chatml,
+            ChatTemplate::Gemma,
+            ChatTemplate::Llama3,
+        ] {
             let prompt = build_rag_prompt("質問", &[], &template);
             assert!(
                 prompt.contains("ナレッジベースに基づいて"),

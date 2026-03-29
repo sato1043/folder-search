@@ -88,6 +88,40 @@
 - 一度ダウンロードしたモデルは `models/` ディレクトリにキャッシュされる
 - `models/` ディレクトリは `.gitignore` に含まれる（リポジトリにコミットしない）
 
+### 1.3 環境変数
+
+本プロジェクトはフロントエンド（Vite）・バックエンド（Rust）ともに `.env` ファイルで環境変数を管理する。モードの決定はビルド時に行われ、ランタイムでは影響しない。
+
+#### ファイル読み込み順序
+
+| モード | Vite（フロントエンド） | Rust（バックエンド） |
+|---|---|---|
+| development | `.env.development` → `.env.development.local` | `.env.development` → `.env.development.local` |
+| production | `.env.production` → `.env.production.local` | `.env.production` → `.env.production.local` |
+
+`.local` が付くファイルは `.gitignore` 済み（個人設定用）。
+
+#### モードの決定方法
+
+- **Vite**: `vite dev` → development、`vite build` → production。ビルド時に `import.meta.env.*` を静的置換する
+- **Rust**: `#[cfg(debug_assertions)]` → development、`#[cfg(not(debug_assertions))]` → production。コンパイル時に決定する
+- **共通**: `NODE_ENV` を実行時に参照していない。両者ともビルド時決定
+
+#### 利用可能な環境変数
+
+| 変数名 | 対象 | 説明 |
+|---|---|---|
+| `TAURI_OPEN_DEVTOOLS` | Rust（debug_assertionsのみ） | `1` でDevToolsを自動起動 |
+
+#### ファイルの使い分け
+
+- `.env.development` — 開発チーム共通の設定（リポジトリにコミット可）
+- `.env.development.local` — 個人の開発設定（gitignore済み）
+- `.env.production` — 本番共通の設定
+- `.env.example` — テンプレート（コピーして使用）
+
+Rustは `dotenvy` クレートで `.env` ファイルを読み込む（`src-tauri/src/lib.rs` の `run()` 先頭）。
+
 ## 2. コーディング規約
 
 ### 2.1 フロントエンド（TypeScript / React）

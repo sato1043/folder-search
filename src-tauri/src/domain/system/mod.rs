@@ -61,10 +61,7 @@ fn available_memory_mb(system: &SystemInfo) -> u64 {
 }
 
 /// システム情報に基づきモデルの推奨リストを生成する
-pub fn recommend_models(
-    models: &[LlmModelInfo],
-    system: &SystemInfo,
-) -> Vec<ModelRecommendation> {
+pub fn recommend_models(models: &[LlmModelInfo], system: &SystemInfo) -> Vec<ModelRecommendation> {
     let available = available_memory_mb(system);
 
     let mut recommendations: Vec<ModelRecommendation> = models
@@ -150,6 +147,7 @@ mod tests {
                 quantization: "Q4_K_M".to_string(),
                 chat_template: crate::domain::llm::chat_template::ChatTemplate::Chatml,
                 context_length: 32768,
+                is_preset: true,
             },
             LlmModelInfo {
                 name: "1.5B".to_string(),
@@ -161,6 +159,7 @@ mod tests {
                 quantization: "Q4_K_M".to_string(),
                 chat_template: crate::domain::llm::chat_template::ChatTemplate::Chatml,
                 context_length: 32768,
+                is_preset: true,
             },
             LlmModelInfo {
                 name: "7B".to_string(),
@@ -172,6 +171,7 @@ mod tests {
                 quantization: "Q4_K_M".to_string(),
                 chat_template: crate::domain::llm::chat_template::ChatTemplate::Chatml,
                 context_length: 32768,
+                is_preset: true,
             },
             LlmModelInfo {
                 name: "14B".to_string(),
@@ -183,6 +183,7 @@ mod tests {
                 quantization: "Q4_K_M".to_string(),
                 chat_template: crate::domain::llm::chat_template::ChatTemplate::Chatml,
                 context_length: 32768,
+                is_preset: true,
             },
         ]
     }
@@ -216,7 +217,7 @@ mod tests {
     #[test]
     fn test_available_memory_low_ram() {
         let system = test_system(1024); // 1GB
-        // OS_OVERHEAD以下の場合は0になる
+                                        // OS_OVERHEAD以下の場合は0になる
         assert_eq!(available_memory_mb(&system), 0);
     }
 

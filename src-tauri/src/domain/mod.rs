@@ -1,3 +1,4 @@
+pub mod config;
 pub mod embedding;
 pub mod indexer;
 pub mod llm;
