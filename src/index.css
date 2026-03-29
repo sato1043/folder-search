@@ -103,6 +103,58 @@
   color: #c62828;
 }
 
+.section-label {
+  font-size: 11px;
+  color: #666;
+  margin: 6px 0 2px;
+}
+
+.downloaded-models {
+  margin-top: 6px;
+}
+
+.downloaded-model-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 2px 0;
+}
+
+.model-filename {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-size {
+  color: #666;
+  white-space: nowrap;
+}
+
+.delete-btn {
+  background: none;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 1px 4px;
+  color: #999;
+}
+
+.delete-btn:hover:not(:disabled) {
+  color: #c62828;
+  border-color: #c62828;
+}
+
+.storage-usage {
+  font-size: 11px;
+  color: #666;
+  margin-top: 6px;
+}
+
 .search-mode-selector {
   display: flex;
   flex-direction: column;
@@ -155,6 +207,23 @@
   }
   .model-recommendation.toolarge {
     color: #ef5350;
+  }
+  .section-label {
+    color: #aaa;
+  }
+  .model-size {
+    color: #aaa;
+  }
+  .storage-usage {
+    color: #aaa;
+  }
+  .delete-btn {
+    border-color: #555;
+    color: #888;
+  }
+  .delete-btn:hover:not(:disabled) {
+    color: #ef5350;
+    border-color: #ef5350;
   }
 }
 

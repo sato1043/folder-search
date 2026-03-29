@@ -23,6 +23,9 @@ import {
   chat,
   detectSystemInfo,
   getModelRecommendations,
+  listDownloadedModels,
+  deleteModel,
+  getStorageUsage,
 } from "./lib/tauri";
 import type {
   SearchResult,
@@ -33,6 +36,8 @@ import type {
   LlmLoadResult,
   SystemInfo,
   ModelRecommendation,
+  DownloadedModelInfo,
+  StorageUsage,
 } from "./types";
 
 type AppMode = "search" | "chat";
@@ -65,9 +70,11 @@ function App() {
   const [isChatting, setIsChatting] = useState(false);
   const [streamingText, setStreamingText] = useState<string>("");
 
-  // システム情報・モデル推奨
+  // システム情報・モデル推奨・ストレージ
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
   const [recommendations, setRecommendations] = useState<ModelRecommendation[]>([]);
+  const [downloadedModels, setDownloadedModels] = useState<DownloadedModelInfo[]>([]);
+  const [storageUsage, setStorageUsage] = useState<StorageUsage | null>(null);
 
   // 初期化
   useEffect(() => {
@@ -95,6 +102,8 @@ function App() {
         }
       })
       .catch(() => {});
+    listDownloadedModels().then(setDownloadedModels).catch(() => {});
+    getStorageUsage().then(setStorageUsage).catch(() => {});
   }, []);
 
   // ダウンロード進捗のリスナー
@@ -151,6 +160,11 @@ function App() {
     };
   }, []);
 
+  const refreshModelStorage = useCallback(async () => {
+    listDownloadedModels().then(setDownloadedModels).catch(() => {});
+    getStorageUsage().then(setStorageUsage).catch(() => {});
+  }, []);
+
   const triggerBuildVectorIndex = useCallback(async () => {
     try {
       setIsBuildingVector(true);
@@ -200,6 +214,7 @@ function App() {
       setModelReady(true);
       setIsDownloading(false);
       setDownloadStatus("");
+      await refreshModelStorage();
 
       if (indexCount > 0) {
         await triggerBuildVectorIndex();
@@ -209,7 +224,7 @@ function App() {
       setIsDownloading(false);
       setDownloadStatus("");
     }
-  }, [indexCount, triggerBuildVectorIndex]);
+  }, [indexCount, triggerBuildVectorIndex, refreshModelStorage]);
 
   const handleDownloadAndLoadLlm = useCallback(async () => {
     const model = llmModels.find((m) => m.filename === selectedModel);
@@ -226,12 +241,26 @@ function App() {
       setLlmReady(true);
       setIsLoadingLlm(false);
       setDownloadStatus("");
+      await refreshModelStorage();
     } catch (e) {
       setError(String(e));
       setIsLoadingLlm(false);
       setDownloadStatus("");
     }
-  }, [llmModels, selectedModel]);
+  }, [llmModels, selectedModel, refreshModelStorage]);
+
+  const handleDeleteModel = useCallback(
+    async (filename: string) => {
+      try {
+        setError(null);
+        await deleteModel(filename);
+        await refreshModelStorage();
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [refreshModelStorage],
+  );
 
   const handleSearch = useCallback(
     async (query: string) => {
@@ -334,6 +363,7 @@ function App() {
           >
             {llmModels.map((m) => {
               const rec = recommendations.find((r) => r.filename === m.filename);
+              const dl = downloadedModels.find((d) => d.filename === m.filename);
               const badge = rec
                 ? rec.is_best_fit
                   ? "[最適] "
@@ -343,9 +373,10 @@ function App() {
                       ? "[非推奨] "
                       : ""
                 : "";
+              const dlMark = dl ? "● " : "○ ";
               return (
                 <option key={m.filename} value={m.filename}>
-                  {badge}{m.name}
+                  {dlMark}{badge}{m.name}
                 </option>
               );
             })}
@@ -365,6 +396,39 @@ function App() {
                 llmLoadResult.gpu_active
                   ? ` (GPU: ${llmLoadResult.gpu_layers}層)`
                   : " (CPU)"
+              )}
+            </p>
+          )}
+          {downloadedModels.filter((d) => !d.is_embedding).length > 0 && (
+            <div className="downloaded-models">
+              <p className="section-label">DL済みモデル:</p>
+              {downloadedModels
+                .filter((d) => !d.is_embedding)
+                .map((d) => (
+                  <div key={d.filename} className="downloaded-model-item">
+                    <span className="model-filename" title={d.filename}>
+                      {d.filename.replace(/\.gguf$/, "")}
+                    </span>
+                    <span className="model-size">
+                      {(d.size_bytes / (1024 * 1024 * 1024)).toFixed(1)} GB
+                    </span>
+                    <button
+                      className="delete-btn"
+                      onClick={() => handleDeleteModel(d.filename)}
+                      disabled={isLoadingLlm}
+                      title="削除"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+            </div>
+          )}
+          {storageUsage && (
+            <p className="storage-usage">
+              モデル合計: {(storageUsage.total_used_bytes / (1024 * 1024 * 1024)).toFixed(1)} GB
+              {storageUsage.disk_free_bytes > 0 && (
+                <> / 空き: {(storageUsage.disk_free_bytes / (1024 * 1024 * 1024)).toFixed(0)} GB</>
               )}
             </p>
           )}

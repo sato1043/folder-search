@@ -63,6 +63,9 @@ pub fn run() {
             commands::chat,
             commands::detect_system_info,
             commands::get_model_recommendations,
+            commands::list_downloaded_models,
+            commands::delete_model,
+            commands::get_storage_usage,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

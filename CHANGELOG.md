@@ -16,6 +16,7 @@
 - システム情報検出（RAM・GPU VRAM）とLLMモデル自動推奨（sysinfo + プラットフォーム別GPU検出）
 - GPU推論の適応的レイヤーオフロード（VRAM推定→二分探索フォールバック→CPU）
 - macOS Metal 自動有効化、CUDA オプショナルフィーチャー（`--features cuda`）
+- モデルストレージ管理（DL済みモデル一覧・ファイルサイズ表示・削除機能・ストレージ使用量表示）
 
 ### Changed
 

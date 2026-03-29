@@ -85,3 +85,16 @@ export type LlmLoadResult = {
   gpu_active: boolean;
   gpu_layers: number;
 };
+
+/** ダウンロード済みモデル情報 */
+export type DownloadedModelInfo = {
+  filename: string;
+  size_bytes: number;
+  is_embedding: boolean;
+};
+
+/** モデルストレージ使用状況 */
+export type StorageUsage = {
+  total_used_bytes: number;
+  disk_free_bytes: number;
+};

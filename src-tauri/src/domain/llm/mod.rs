@@ -38,6 +38,26 @@ pub struct LlmModelInfo {
     pub quantization: String,
 }
 
+/// ダウンロード済みモデルの情報
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DownloadedModelInfo {
+    /// ファイル名
+    pub filename: String,
+    /// ファイルサイズ（バイト）
+    pub size_bytes: u64,
+    /// embeddingモデルのファイルか（model.onnx / tokenizer.json）
+    pub is_embedding: bool,
+}
+
+/// モデルストレージ使用状況
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StorageUsage {
+    /// モデルファイルの合計サイズ（バイト）
+    pub total_used_bytes: u64,
+    /// ディスク空き容量（バイト）。取得できない場合は0
+    pub disk_free_bytes: u64,
+}
+
 /// KVキャッシュ・ワークスペースのオーバーヘッド見積もり（MB）
 const GPU_OVERHEAD_MB: u64 = 512;
 

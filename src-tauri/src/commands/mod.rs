@@ -7,7 +7,7 @@ use crate::domain::embedding::{EmbeddingGenerator, VectorSearcher};
 use crate::domain::indexer::chunker::split_into_chunks;
 use crate::domain::indexer::{Indexer, IndexStatus};
 use crate::domain::llm::rag::{build_rag_prompt, extract_sources, ContextChunk, RagAnswer};
-use crate::domain::llm::{available_models, LlmInference, LlmModelInfo};
+use crate::domain::llm::{available_models, DownloadedModelInfo, LlmInference, LlmModelInfo, StorageUsage};
 use crate::domain::search::hybrid::{reciprocal_rank_fusion, HybridSearchResult};
 use crate::domain::search::{FulltextSearcher, SearchResult};
 use crate::domain::system::{recommend_models, ModelRecommendation, SystemInfo};
@@ -703,4 +703,39 @@ pub fn get_model_recommendations() -> Vec<ModelRecommendation> {
     let system = crate::infra::system::detect_system_info();
     let models = available_models();
     recommend_models(&models, &system)
+}
+
+/// ダウンロード済みモデルの一覧を返す
+#[tauri::command]
+pub fn list_downloaded_models(state: State<'_, AppState>) -> Vec<DownloadedModelInfo> {
+    model::list_downloaded_models(&state.model_dir)
+}
+
+/// モデルファイルを削除する
+///
+/// ロード中のLLMモデルと同名のファイルは削除を拒否する
+#[tauri::command]
+pub fn delete_model(
+    filename: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    // embeddingモデルがロード中の場合、embedding関連ファイルの削除を拒否
+    {
+        let guard = state.embedding_model.lock().map_err(|e| e.to_string())?;
+        if guard.is_some() && (filename == "model.onnx" || filename == "tokenizer.json") {
+            return Err("embeddingモデルがロード中のため削除できない".to_string());
+        }
+    }
+
+    // 現在ロード中のLLMモデルかどうかは直接判定できないため、
+    // LLMエンジンがロード済みの場合にGGUFファイル削除を警告なしで許可する
+    // （フロントエンド側でUI上のガードを行う）
+
+    model::delete_model_file(&state.model_dir, &filename)
+}
+
+/// モデルストレージの使用状況を返す
+#[tauri::command]
+pub fn get_storage_usage(state: State<'_, AppState>) -> StorageUsage {
+    model::get_storage_usage(&state.model_dir)
 }

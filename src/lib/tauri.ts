@@ -1,6 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { SearchResult, HybridSearchResult, IndexStatus } from "../types";
-import type { LlmModelInfo, RagAnswer, SystemInfo, ModelRecommendation, LlmLoadResult } from "../types";
+import type {
+  LlmModelInfo,
+  RagAnswer,
+  SystemInfo,
+  ModelRecommendation,
+  LlmLoadResult,
+  DownloadedModelInfo,
+  StorageUsage,
+} from "../types";
 
 export async function buildIndex(folderPath: string, indexPath: string): Promise<number> {
   return invoke<number>("build_index", { folderPath, indexPath });
@@ -63,4 +71,16 @@ export async function detectSystemInfo(): Promise<SystemInfo> {
 
 export async function getModelRecommendations(): Promise<ModelRecommendation[]> {
   return invoke<ModelRecommendation[]>("get_model_recommendations");
+}
+
+export async function listDownloadedModels(): Promise<DownloadedModelInfo[]> {
+  return invoke<DownloadedModelInfo[]>("list_downloaded_models");
+}
+
+export async function deleteModel(filename: string): Promise<void> {
+  return invoke<void>("delete_model", { filename });
+}
+
+export async function getStorageUsage(): Promise<StorageUsage> {
+  return invoke<StorageUsage>("get_storage_usage");
 }
