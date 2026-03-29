@@ -1,6 +1,6 @@
 [package]
 name = "folder-search"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local knowledge base search application"
 authors = ["sato1043@updater.cc"]
 edition = "2021"

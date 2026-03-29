@@ -1,7 +1,7 @@
 {
   "name": "folder-search",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT",
   "author": "sato1043@updater.cc",
   "type": "module",
