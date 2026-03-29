@@ -80,6 +80,29 @@
   color: #2e7d32;
 }
 
+.system-info {
+  font-size: 11px;
+  color: #666;
+  margin-bottom: 6px;
+}
+
+.model-recommendation {
+  font-size: 11px;
+  margin: 4px 0;
+}
+
+.model-recommendation.recommended {
+  color: #2e7d32;
+}
+
+.model-recommendation.warning {
+  color: #e65100;
+}
+
+.model-recommendation.toolarge {
+  color: #c62828;
+}
+
 .search-mode-selector {
   display: flex;
   flex-direction: column;
@@ -120,6 +143,18 @@
   }
   .index-count {
     color: #ccc;
+  }
+  .system-info {
+    color: #aaa;
+  }
+  .model-recommendation.recommended {
+    color: #66bb6a;
+  }
+  .model-recommendation.warning {
+    color: #ff9800;
+  }
+  .model-recommendation.toolarge {
+    color: #ef5350;
   }
 }
 

@@ -13,6 +13,7 @@
 - embedding差分更新（変更ファイルのみembedding再生成、未変更ファイルはキャッシュ再利用）
 - ファイル監視による自動インデックス更新（notify クレート、2秒デバウンス）
 - 全文検索インデックスの差分更新（tantivy Term削除による個別文書更新）
+- システム情報検出（RAM・GPU VRAM）とLLMモデル自動推奨（sysinfo + プラットフォーム別GPU検出）
 
 ### Changed
 

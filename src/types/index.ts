@@ -55,3 +55,27 @@ export type RagAnswer = {
   answer: string;
   sources: string[];
 };
+
+/** GPU情報 */
+export type GpuInfo = {
+  name: string;
+  vram_mb: number;
+};
+
+/** システム情報 */
+export type SystemInfo = {
+  total_ram_mb: number;
+  gpus: GpuInfo[];
+  gpu_inference_available: boolean;
+};
+
+/** モデル推奨ステータス */
+export type RecommendationStatus = "Recommended" | "Warning" | "TooLarge";
+
+/** モデル推奨情報 */
+export type ModelRecommendation = {
+  filename: string;
+  status: RecommendationStatus;
+  is_best_fit: boolean;
+  reason: string;
+};

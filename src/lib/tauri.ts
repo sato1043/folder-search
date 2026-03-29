@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { SearchResult, HybridSearchResult, IndexStatus } from "../types";
-import type { LlmModelInfo, RagAnswer } from "../types";
+import type { LlmModelInfo, RagAnswer, SystemInfo, ModelRecommendation } from "../types";
 
 export async function buildIndex(folderPath: string, indexPath: string): Promise<number> {
   return invoke<number>("build_index", { folderPath, indexPath });
@@ -55,4 +55,12 @@ export async function isLlmReady(): Promise<boolean> {
 
 export async function chat(question: string): Promise<RagAnswer> {
   return invoke<RagAnswer>("chat", { question });
+}
+
+export async function detectSystemInfo(): Promise<SystemInfo> {
+  return invoke<SystemInfo>("detect_system_info");
+}
+
+export async function getModelRecommendations(): Promise<ModelRecommendation[]> {
+  return invoke<ModelRecommendation[]>("get_model_recommendations");
 }

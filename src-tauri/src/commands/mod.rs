@@ -10,6 +10,7 @@ use crate::domain::llm::rag::{build_rag_prompt, extract_sources, ContextChunk, R
 use crate::domain::llm::{available_models, LlmInference, LlmModelInfo};
 use crate::domain::search::hybrid::{reciprocal_rank_fusion, HybridSearchResult};
 use crate::domain::search::{FulltextSearcher, SearchResult};
+use crate::domain::system::{recommend_models, ModelRecommendation, SystemInfo};
 use crate::infra::hnsw::HnswVectorIndex;
 use crate::infra::llama::LlamaEngine;
 use crate::infra::model;
@@ -665,4 +666,18 @@ pub fn chat(
     }
 
     Ok(RagAnswer { answer, sources })
+}
+
+/// システム情報（RAM・GPU）を検出する
+#[tauri::command]
+pub fn detect_system_info() -> SystemInfo {
+    crate::infra::system::detect_system_info()
+}
+
+/// システム情報に基づくモデル推奨リストを返す
+#[tauri::command]
+pub fn get_model_recommendations() -> Vec<ModelRecommendation> {
+    let system = crate::infra::system::detect_system_info();
+    let models = available_models();
+    recommend_models(&models, &system)
 }

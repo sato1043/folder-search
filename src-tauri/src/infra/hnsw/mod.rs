@@ -231,4 +231,107 @@ mod tests {
         let results = index.search_nearest(&embeddings[0], 5).unwrap();
         assert!(results.len() <= 5);
     }
+
+    #[test]
+    fn test_from_cache_rebuild() {
+        // 元のインデックスを構築
+        let mut index = HnswVectorIndex::new();
+        let chunks: Vec<Chunk> = (0..5)
+            .map(|i| Chunk {
+                source_path: format!("/doc{}.md", i),
+                chunk_index: 0,
+                text: format!("ドキュメント{}", i),
+            })
+            .collect();
+        let embeddings: Vec<Embedding> = (0..5)
+            .map(|i| random_embedding(384, i as u64 * 100 + 1))
+            .collect();
+
+        for (chunk, emb) in chunks.iter().zip(embeddings.iter()) {
+            index.add(chunk, emb);
+        }
+
+        // キャッシュから再構築
+        let cached = CachedEmbeddings {
+            metas: index.metas().to_vec(),
+            embeddings: embeddings.clone(),
+        };
+        let rebuilt = HnswVectorIndex::from_cache(cached);
+
+        assert_eq!(rebuilt.len(), 5);
+        let results = rebuilt.search_nearest(&embeddings[2], 1).unwrap();
+        assert_eq!(results[0].source_path, "/doc2.md");
+    }
+
+    #[test]
+    fn test_from_cache_with_deletion() {
+        // 5件のチャンクからdoc2を除いた4件で再構築
+        let embeddings: Vec<Embedding> = (0..5)
+            .map(|i| random_embedding(384, i as u64 * 100 + 1))
+            .collect();
+        let metas: Vec<ChunkMeta> = (0..5)
+            .map(|i| ChunkMeta {
+                chunk_id: i,
+                source_path: format!("/doc{}.md", i),
+                chunk_index: 0,
+                text: format!("ドキュメント{}", i),
+            })
+            .collect();
+
+        // doc2を除外してキャッシュを構築
+        let mut filtered_metas = Vec::new();
+        let mut filtered_embeddings = Vec::new();
+        for (meta, emb) in metas.into_iter().zip(embeddings.iter()) {
+            if meta.source_path != "/doc2.md" {
+                filtered_metas.push(meta);
+                filtered_embeddings.push(emb.clone());
+            }
+        }
+        // chunk_idを振り直す
+        for (i, meta) in filtered_metas.iter_mut().enumerate() {
+            meta.chunk_id = i;
+        }
+
+        let cached = CachedEmbeddings {
+            metas: filtered_metas,
+            embeddings: filtered_embeddings,
+        };
+        let index = HnswVectorIndex::from_cache(cached);
+
+        assert_eq!(index.len(), 4);
+        // doc2のembeddingで検索しても、doc2自体は結果に出ない
+        let results = index.search_nearest(&embeddings[2], 4).unwrap();
+        assert!(
+            results.iter().all(|r| r.source_path != "/doc2.md"),
+            "削除されたドキュメントは検索結果に含まれない"
+        );
+    }
+
+    #[test]
+    fn test_from_cache_with_addition() {
+        // 3件のキャッシュに2件追加して5件で再構築
+        let embeddings: Vec<Embedding> = (0..5)
+            .map(|i| random_embedding(384, i as u64 * 100 + 1))
+            .collect();
+        let metas: Vec<ChunkMeta> = (0..5)
+            .enumerate()
+            .map(|(i, _)| ChunkMeta {
+                chunk_id: i,
+                source_path: format!("/doc{}.md", i),
+                chunk_index: 0,
+                text: format!("ドキュメント{}", i),
+            })
+            .collect();
+
+        let cached = CachedEmbeddings {
+            metas,
+            embeddings: embeddings.clone(),
+        };
+        let index = HnswVectorIndex::from_cache(cached);
+
+        assert_eq!(index.len(), 5);
+        // 追加されたdoc3, doc4が検索可能
+        let results = index.search_nearest(&embeddings[4], 1).unwrap();
+        assert_eq!(results[0].source_path, "/doc4.md");
+    }
 }

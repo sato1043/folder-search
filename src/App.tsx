@@ -21,6 +21,8 @@ import {
   loadLlmModel,
   isLlmReady,
   chat,
+  detectSystemInfo,
+  getModelRecommendations,
 } from "./lib/tauri";
 import type {
   SearchResult,
@@ -28,6 +30,8 @@ import type {
   VectorIndexProgress,
   SearchMode,
   LlmModelInfo,
+  SystemInfo,
+  ModelRecommendation,
 } from "./types";
 
 type AppMode = "search" | "chat";
@@ -59,6 +63,10 @@ function App() {
   const [isChatting, setIsChatting] = useState(false);
   const [streamingText, setStreamingText] = useState<string>("");
 
+  // システム情報・モデル推奨
+  const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
+  const [recommendations, setRecommendations] = useState<ModelRecommendation[]>([]);
+
   // 初期化
   useEffect(() => {
     isEmbeddingModelReady()
@@ -70,7 +78,19 @@ function App() {
     listAvailableModels()
       .then((models) => {
         setLlmModels(models);
-        if (models.length > 0) setSelectedModel(models[0].filename);
+      })
+      .catch(() => {});
+    detectSystemInfo()
+      .then(setSystemInfo)
+      .catch(() => {});
+    getModelRecommendations()
+      .then((recs) => {
+        setRecommendations(recs);
+        // best_fitモデルを初期選択する
+        const bestFit = recs.find((r) => r.is_best_fit);
+        if (bestFit) {
+          setSelectedModel(bestFit.filename);
+        }
       })
       .catch(() => {});
   }, []);
@@ -294,17 +314,44 @@ function App() {
         <hr className="sidebar-divider" />
 
         <div className="llm-section">
+          {systemInfo && (
+            <p className="system-info">
+              RAM: {Math.round(systemInfo.total_ram_mb / 1024)} GB
+              {systemInfo.gpus.length > 0 && (
+                <> | GPU: {systemInfo.gpus.map((g) =>
+                  g.vram_mb > 0 ? `${g.name} (${Math.round(g.vram_mb / 1024)} GB)` : g.name
+                ).join(", ")}</>
+              )}
+            </p>
+          )}
           <select
             value={selectedModel}
             onChange={(e) => setSelectedModel(e.target.value)}
             disabled={isLoadingLlm}
           >
-            {llmModels.map((m) => (
-              <option key={m.filename} value={m.filename}>
-                {m.name}
-              </option>
-            ))}
+            {llmModels.map((m) => {
+              const rec = recommendations.find((r) => r.filename === m.filename);
+              const badge = rec
+                ? rec.is_best_fit
+                  ? "[最適] "
+                  : rec.status === "Warning"
+                    ? "[注意] "
+                    : rec.status === "TooLarge"
+                      ? "[非推奨] "
+                      : ""
+                : "";
+              return (
+                <option key={m.filename} value={m.filename}>
+                  {badge}{m.name}
+                </option>
+              );
+            })}
           </select>
+          {recommendations.find((r) => r.filename === selectedModel) && (
+            <p className={`model-recommendation ${recommendations.find((r) => r.filename === selectedModel)!.status.toLowerCase()}`}>
+              {recommendations.find((r) => r.filename === selectedModel)!.reason}
+            </p>
+          )}
           <button onClick={handleDownloadAndLoadLlm} disabled={isLoadingLlm || !selectedModel}>
             {isLoadingLlm ? "準備中..." : llmReady ? "モデル切替" : "LLMモデル取得・ロード"}
           </button>

@@ -61,6 +61,8 @@ pub fn run() {
             commands::load_llm_model,
             commands::is_llm_ready,
             commands::chat,
+            commands::detect_system_info,
+            commands::get_model_recommendations,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
