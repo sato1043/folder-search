@@ -192,6 +192,7 @@ src-tauri/src/
 ├── commands/
 │   └── mod.rs                      ← 全Tauriコマンド（13コマンド）
 │                                     AppState構造体定義
+│                                     ベクトルインデックス構築: キャッシュヒット/差分更新/フルビルドの3経路
 ├── domain/
 │   ├── mod.rs
 │   ├── indexer/
@@ -218,6 +219,11 @@ src-tauri/src/
     ├── hnsw/
     │   └── mod.rs                  ← HnswVectorIndex（VectorSearcher実装）
     │                                 hnsw_rs + anndists(DistCosine) によるベクトル検索
+    │                                 from_cache(): キャッシュからのHNSW再構築
+    ├── vector_cache/
+    │   └── mod.rs                  ← VectorCache（ベクトルインデックスのディスクキャッシュ）
+    │                                 フォルダごとのembedding+メタデータ永続化
+    │                                 CacheDiff: ファイル変更の差分計算
     ├── llama/
     │   └── mod.rs                  ← LlamaEngine（LlmInference実装）
     │                                 llama-cpp-2 による GGUF モデル推論

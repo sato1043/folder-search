@@ -33,6 +33,21 @@ pub struct CachedEmbeddings {
     pub embeddings: Vec<Embedding>,
 }
 
+/// キャッシュとの差分情報
+#[derive(Debug)]
+pub struct CacheDiff {
+    pub unchanged: Vec<String>,
+    pub added: Vec<String>,
+    pub modified: Vec<String>,
+    pub deleted: Vec<String>,
+}
+
+impl CacheDiff {
+    pub fn has_changes(&self) -> bool {
+        !self.added.is_empty() || !self.modified.is_empty() || !self.deleted.is_empty()
+    }
+}
+
 /// ベクトルインデックスのキャッシュ管理
 pub struct VectorCache {
     base_dir: PathBuf,
@@ -114,6 +129,58 @@ impl VectorCache {
 
         let current = Self::scan_fingerprints(folder_path);
         manifest.file_fingerprints == current
+    }
+
+    /// キャッシュとの差分を計算する
+    ///
+    /// キャッシュが存在しない場合はNoneを返す。
+    pub fn compute_diff(&self, folder_path: &str) -> Option<CacheDiff> {
+        let cache_dir = self.cache_dir_for(folder_path);
+        let manifest_path = cache_dir.join("manifest.json");
+        let embeddings_path = cache_dir.join("embeddings.bin");
+
+        if !manifest_path.exists() || !embeddings_path.exists() {
+            return None;
+        }
+
+        let manifest: CacheManifest = std::fs::read_to_string(&manifest_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())?;
+
+        if manifest.format_version != FORMAT_VERSION {
+            return None;
+        }
+
+        let current = Self::scan_fingerprints(folder_path);
+        let cached = &manifest.file_fingerprints;
+
+        let mut unchanged = Vec::new();
+        let mut added = Vec::new();
+        let mut modified = Vec::new();
+        let mut deleted = Vec::new();
+
+        // 現在のファイルをチェック
+        for (path, fp) in &current {
+            match cached.get(path) {
+                Some(cached_fp) if cached_fp == fp => unchanged.push(path.clone()),
+                Some(_) => modified.push(path.clone()),
+                None => added.push(path.clone()),
+            }
+        }
+
+        // 削除されたファイルをチェック
+        for path in cached.keys() {
+            if !current.contains_key(path) {
+                deleted.push(path.clone());
+            }
+        }
+
+        Some(CacheDiff {
+            unchanged,
+            added,
+            modified,
+            deleted,
+        })
     }
 
     /// キャッシュからembeddingデータをロードする
@@ -272,5 +339,90 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cache = VectorCache::new(tmp.path());
         assert!(!cache.is_cache_valid("/nonexistent/path"));
+    }
+
+    #[test]
+    fn test_compute_diff_no_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = VectorCache::new(tmp.path());
+
+        let folder_dir = tempfile::tempdir().unwrap();
+        let test_file = folder_dir.path().join("test.md");
+        {
+            let mut f = std::fs::File::create(&test_file).unwrap();
+            writeln!(f, "テスト").unwrap();
+        }
+
+        let folder_path = folder_dir.path().to_str().unwrap();
+        cache.save(folder_path, &[], &[]).unwrap();
+
+        let diff = cache.compute_diff(folder_path).unwrap();
+        assert!(!diff.has_changes());
+        assert_eq!(diff.unchanged.len(), 1);
+        assert!(diff.added.is_empty());
+        assert!(diff.modified.is_empty());
+        assert!(diff.deleted.is_empty());
+    }
+
+    #[test]
+    fn test_compute_diff_file_added() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = VectorCache::new(tmp.path());
+
+        let folder_dir = tempfile::tempdir().unwrap();
+        let test_file = folder_dir.path().join("test.md");
+        {
+            let mut f = std::fs::File::create(&test_file).unwrap();
+            writeln!(f, "テスト").unwrap();
+        }
+
+        let folder_path = folder_dir.path().to_str().unwrap();
+        cache.save(folder_path, &[], &[]).unwrap();
+
+        // ファイルを追加
+        let new_file = folder_dir.path().join("new.txt");
+        {
+            let mut f = std::fs::File::create(&new_file).unwrap();
+            writeln!(f, "新規").unwrap();
+        }
+
+        let diff = cache.compute_diff(folder_path).unwrap();
+        assert!(diff.has_changes());
+        assert_eq!(diff.added.len(), 1);
+        assert_eq!(diff.unchanged.len(), 1);
+    }
+
+    #[test]
+    fn test_compute_diff_file_deleted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = VectorCache::new(tmp.path());
+
+        let folder_dir = tempfile::tempdir().unwrap();
+        let file_a = folder_dir.path().join("a.md");
+        let file_b = folder_dir.path().join("b.md");
+        {
+            let mut f = std::fs::File::create(&file_a).unwrap();
+            writeln!(f, "ファイルA").unwrap();
+            let mut f = std::fs::File::create(&file_b).unwrap();
+            writeln!(f, "ファイルB").unwrap();
+        }
+
+        let folder_path = folder_dir.path().to_str().unwrap();
+        cache.save(folder_path, &[], &[]).unwrap();
+
+        // ファイルを削除
+        std::fs::remove_file(&file_b).unwrap();
+
+        let diff = cache.compute_diff(folder_path).unwrap();
+        assert!(diff.has_changes());
+        assert_eq!(diff.deleted.len(), 1);
+        assert_eq!(diff.unchanged.len(), 1);
+    }
+
+    #[test]
+    fn test_compute_diff_no_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = VectorCache::new(tmp.path());
+        assert!(cache.compute_diff("/nonexistent/path").is_none());
     }
 }

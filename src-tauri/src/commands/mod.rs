@@ -137,32 +137,163 @@ pub fn build_vector_index(
         .map_err(|e| format!("app_data_dir取得失敗: {}", e))?;
     let cache = VectorCache::new(&app_data_dir);
 
-    // キャッシュが有効ならロードして返す
-    if cache.is_cache_valid(&folder_path) {
-        if let Ok(cached) = cache.load(&folder_path) {
-            let total = cached.metas.len() as u64;
-            let vector_index = HnswVectorIndex::from_cache(cached);
+    // キャッシュ差分を計算
+    let diff = cache.compute_diff(&folder_path);
 
-            let _ = app.emit(
-                "vector-index-progress",
-                serde_json::json!({ "current": total, "total": total }),
-            );
+    // 差分なし → キャッシュからロード
+    if let Some(ref d) = diff {
+        if !d.has_changes() {
+            if let Ok(cached) = cache.load(&folder_path) {
+                let total = cached.metas.len() as u64;
+                let vector_index = HnswVectorIndex::from_cache(cached);
 
-            let mut guard = state.vector_index.lock().map_err(|e| e.to_string())?;
-            *guard = Some(vector_index);
-            return Ok(total);
+                let _ = app.emit(
+                    "vector-index-progress",
+                    serde_json::json!({ "current": total, "total": total }),
+                );
+
+                let mut guard = state.vector_index.lock().map_err(|e| e.to_string())?;
+                *guard = Some(vector_index);
+                return Ok(total);
+            }
         }
     }
 
-    // キャッシュ無効 → フルビルド
     let mut model_guard = state.embedding_model.lock().map_err(|e| e.to_string())?;
     let generator = model_guard
         .as_mut()
         .ok_or_else(|| "embeddingモデルがロードされていない".to_string())?;
 
+    // 差分あり → 差分更新
+    if let Some(ref d) = diff {
+        if d.has_changes() {
+            if let Ok(cached) = cache.load(&folder_path) {
+                return build_vector_index_incremental(
+                    &app, &cache, &folder_path, d, cached, generator, &state,
+                );
+            }
+        }
+    }
+
+    // キャッシュ不在 → フルビルド
+    build_vector_index_full(&app, &cache, &folder_path, generator, &state)
+}
+
+/// 差分更新でベクトルインデックスを構築する
+fn build_vector_index_incremental(
+    app: &tauri::AppHandle,
+    cache: &VectorCache,
+    folder_path: &str,
+    diff: &crate::infra::vector_cache::CacheDiff,
+    cached: crate::infra::vector_cache::CachedEmbeddings,
+    generator: &mut OnnxEmbeddingGenerator,
+    state: &State<'_, AppState>,
+) -> Result<u64, String> {
+    use std::collections::HashSet;
+    use crate::domain::embedding::EmbeddingGenerator;
+
+    let changed_files: HashSet<&str> = diff
+        .modified
+        .iter()
+        .chain(diff.deleted.iter())
+        .map(|s| s.as_str())
+        .collect();
+
+    // 未変更ファイルのチャンク+embeddingを保持
+    let mut all_metas = Vec::new();
+    let mut all_embeddings = Vec::new();
+
+    for (meta, embedding) in cached.metas.into_iter().zip(cached.embeddings.into_iter()) {
+        if !changed_files.contains(meta.source_path.as_str()) {
+            all_metas.push(meta);
+            all_embeddings.push(embedding);
+        }
+    }
+
+    // 追加・変更ファイルのチャンク分割 + embedding生成
+    let target_files: Vec<&str> = diff
+        .added
+        .iter()
+        .chain(diff.modified.iter())
+        .map(|s| s.as_str())
+        .collect();
+
+    let mut new_chunks = Vec::new();
+    for file_path in &target_files {
+        let body = match std::fs::read_to_string(file_path) {
+            Ok(content) => content,
+            Err(_) => continue,
+        };
+        let chunks = split_into_chunks(file_path, &body, 500, 100);
+        new_chunks.extend(chunks);
+    }
+
+    let new_total = new_chunks.len();
+    let progress_interval = std::cmp::max(new_total / 100, 1);
+
+    for (i, chunk) in new_chunks.iter().enumerate() {
+        let text_with_prefix = format!("passage: {}", chunk.text);
+        let embedding = generator
+            .generate(&text_with_prefix)
+            .map_err(|e| format!("embedding生成失敗: {}", e))?;
+
+        all_metas.push(crate::infra::hnsw::ChunkMeta {
+            chunk_id: 0, // from_cacheで振り直される
+            source_path: chunk.source_path.clone(),
+            chunk_index: chunk.chunk_index,
+            text: chunk.text.clone(),
+        });
+        all_embeddings.push(embedding);
+
+        if i % progress_interval == 0 {
+            let _ = app.emit(
+                "vector-index-progress",
+                serde_json::json!({
+                    "current": i + 1,
+                    "total": new_total,
+                }),
+            );
+        }
+    }
+
+    // chunk_idを振り直す
+    for (i, meta) in all_metas.iter_mut().enumerate() {
+        meta.chunk_id = i;
+    }
+
+    let total = all_metas.len() as u64;
+
+    // HNSWを全体再構築
+    let combined = crate::infra::vector_cache::CachedEmbeddings {
+        metas: all_metas,
+        embeddings: all_embeddings.clone(),
+    };
+    let vector_index = HnswVectorIndex::from_cache(combined);
+
+    // キャッシュ保存
+    if let Err(e) = cache.save(folder_path, vector_index.metas(), &all_embeddings) {
+        eprintln!("ベクトルキャッシュ保存失敗（無視）: {}", e);
+    }
+
+    let mut guard = state.vector_index.lock().map_err(|e| e.to_string())?;
+    *guard = Some(vector_index);
+
+    Ok(total)
+}
+
+/// フルビルドでベクトルインデックスを構築する
+fn build_vector_index_full(
+    app: &tauri::AppHandle,
+    cache: &VectorCache,
+    folder_path: &str,
+    generator: &mut OnnxEmbeddingGenerator,
+    state: &State<'_, AppState>,
+) -> Result<u64, String> {
+    use crate::domain::embedding::EmbeddingGenerator;
+
     // ファイル走査・チャンク分割
     let mut all_chunks = Vec::new();
-    for entry in walkdir::WalkDir::new(&folder_path)
+    for entry in walkdir::WalkDir::new(folder_path)
         .into_iter()
         .filter_map(|e| e.ok())
     {
@@ -181,15 +312,14 @@ pub fn build_vector_index(
         let chunks = split_into_chunks(
             &path.to_string_lossy(),
             &body,
-            500,  // チャンクサイズ: 500文字
-            100,  // オーバーラップ: 100文字
+            500,
+            100,
         );
         all_chunks.extend(chunks);
     }
 
     let total = all_chunks.len() as u64;
 
-    // embedding生成 + HNSWインデックス構築
     let mut vector_index = HnswVectorIndex::new();
     let mut all_embeddings: Vec<Vec<f32>> = Vec::with_capacity(all_chunks.len());
 
@@ -214,8 +344,7 @@ pub fn build_vector_index(
         }
     }
 
-    // キャッシュ保存（失敗しても続行）
-    if let Err(e) = cache.save(&folder_path, vector_index.metas(), &all_embeddings) {
+    if let Err(e) = cache.save(folder_path, vector_index.metas(), &all_embeddings) {
         eprintln!("ベクトルキャッシュ保存失敗（無視）: {}", e);
     }
 
