@@ -140,7 +140,8 @@ Tauri v2の2層構成（WebView + Rustネイティブレイヤー）を採用し
 
 - [要件定義書](docs/requirements.md)
 - [アーキテクチャ設計書](docs/architecture.md)
-- [機能一覧・TODO](docs/features.md)
+- [機能ロードマップ](docs/features.md)
+- [TODO（実装タスク）](docs/TODO.md)
 - [コントリビューションガイド](docs/CONTRIBUTING.md)
 - [手動E2Eテスト項目](docs/manual-e2e-tests.md)
 - [リリース手順](docs/RELEASING.md)
