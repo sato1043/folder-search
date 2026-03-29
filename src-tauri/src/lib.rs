@@ -23,6 +23,7 @@ pub fn run() {
                 .and_then(|p| p.parent().map(|d| d.join("models")))
                 .unwrap_or_else(|| std::path::PathBuf::from("./models")),
             folder_path: Mutex::new(None),
+            watcher: Mutex::new(None),
         })
         .setup(|app| {
             let state = app.state::<AppState>();

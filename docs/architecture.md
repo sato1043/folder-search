@@ -224,6 +224,9 @@ src-tauri/src/
     │   └── mod.rs                  ← VectorCache（ベクトルインデックスのディスクキャッシュ）
     │                                 フォルダごとのembedding+メタデータ永続化
     │                                 CacheDiff: ファイル変更の差分計算
+    ├── watcher/
+    │   └── mod.rs                  ← FileWatcher（ファイル監視）
+    │                                 notify + debouncer によるフォルダ再帰監視
     ├── llama/
     │   └── mod.rs                  ← LlamaEngine（LlmInference実装）
     │                                 llama-cpp-2 による GGUF モデル推論
@@ -396,3 +399,35 @@ pub struct AppState {
 | libclang-dev | llama-cpp-2のbindgen |
 | webkit2gtk-4.1-dev | Tauri WebView (Linux) |
 | webkit2gtk-driver | E2Eテスト (Linux) |
+
+## 10. ファイル監視（設計メモ）
+
+### 10.1 概要
+
+フォルダ内のファイル変更を検知し、全文検索インデックスとベクトルインデックスを自動更新する。
+
+```
+フォルダ選択 → インデックス構築 → notify::RecommendedWatcher 開始
+                                        ↓
+                                  ファイル変更イベント
+                                        ↓
+                                  デバウンス（2秒）
+                                        ↓
+                              全文検索インデックス差分更新
+                                        ↓
+                              ベクトルインデックス差分更新
+                                        ↓
+                              フロントエンドに通知（Tauri event）
+```
+
+### 10.2 差分更新方式
+
+- **全文検索**: tantivy の `path` フィールドが `STRING` 型のため、`Term::from_field_text` で個別文書の削除が可能。変更ファイルは削除→再追加で更新する
+- **ベクトル検索**: 既存の `build_vector_index` を再呼び出しする。`VectorCache::compute_diff` でファイル変更を検出し、変更ファイルのみembeddingを再生成する。HNSWインデックスは全体再構築（hnsw_rsに削除APIがないため）
+
+### 10.3 注意事項
+
+- ウォッチャーのコールバックは別スレッドで実行される。AppStateのMutexアクセスでデッドロックに注意する
+- フォルダ再選択時に前のウォッチャーを確実に停止してから新しいウォッチャーを開始する
+- デバウンス中にアプリが終了した場合の未処理イベントは無視してよい
+- WSL2環境ではnotifyのinotifyがホストファイルシステム（/mnt/c/等）の変更を検知できない可能性がある。WSL2ネイティブのファイルシステムでは動作する

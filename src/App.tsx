@@ -104,6 +104,21 @@ function App() {
     };
   }, []);
 
+  // インデックス自動更新のリスナー
+  useEffect(() => {
+    const unlisten = listen<{ fulltext_count: number; vector_chunk_count: number }>(
+      "index-updated",
+      (event) => {
+        const p = event.payload;
+        setIndexCount(p.fulltext_count);
+        setVectorChunkCount(p.vector_chunk_count);
+      },
+    );
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
+
   // チャットトークンのリスナー
   useEffect(() => {
     const unlisten = listen<string>("chat-token", (event) => {

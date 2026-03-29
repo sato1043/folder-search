@@ -16,6 +16,7 @@ use crate::infra::model;
 use crate::infra::onnx::OnnxEmbeddingGenerator;
 use crate::infra::tantivy::TantivySearchEngine;
 use crate::infra::vector_cache::VectorCache;
+use crate::infra::watcher::FileWatcher;
 
 use tauri::Manager;
 
@@ -27,15 +28,23 @@ pub struct AppState {
     pub llm_engine: Mutex<Option<LlamaEngine>>,
     pub model_dir: PathBuf,
     pub folder_path: Mutex<Option<String>>,
+    pub watcher: Mutex<Option<FileWatcher>>,
 }
 
 /// 全文検索インデックスを構築する
 #[tauri::command]
 pub fn build_index(
+    app: tauri::AppHandle,
     folder_path: String,
     index_path: String,
     state: State<'_, AppState>,
 ) -> Result<u64, String> {
+    // 既存のウォッチャーを停止
+    {
+        let mut watcher_guard = state.watcher.lock().map_err(|e| e.to_string())?;
+        *watcher_guard = None;
+    }
+
     let mut engine =
         TantivySearchEngine::new(&index_path).map_err(|e| format!("インデックス作成失敗: {}", e))?;
 
@@ -43,11 +52,86 @@ pub fn build_index(
         .index_folder(&folder_path)
         .map_err(|e| format!("インデックス構築失敗: {}", e))?;
 
-    let mut guard = state.engine.lock().map_err(|e| e.to_string())?;
-    *guard = Some(engine);
+    {
+        let mut guard = state.engine.lock().map_err(|e| e.to_string())?;
+        *guard = Some(engine);
+    }
 
-    let mut fp = state.folder_path.lock().map_err(|e| e.to_string())?;
-    *fp = Some(folder_path);
+    {
+        let mut fp = state.folder_path.lock().map_err(|e| e.to_string())?;
+        *fp = Some(folder_path.clone());
+    }
+
+    // ファイル監視を開始
+    let app_handle = app.app_handle().clone();
+    let watch_folder = folder_path.clone();
+    match FileWatcher::start(&watch_folder, move |changed_files| {
+        let state: tauri::State<'_, AppState> = app_handle.state();
+
+        // 全文検索インデックスの差分更新
+        let fulltext_count = {
+            let mut engine_guard = match state.engine.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            if let Some(engine) = engine_guard.as_mut() {
+                if let Err(e) = engine.update_files(&changed_files) {
+                    eprintln!("全文検索インデックス更新失敗: {}", e);
+                }
+                engine.status().file_count
+            } else {
+                return;
+            }
+        };
+
+        // ベクトルインデックスの差分更新（ベストエフォート）
+        let vector_chunk_count = (|| -> Option<u64> {
+            let app_data_dir = app_handle.path().app_data_dir().ok()?;
+            let cache = VectorCache::new(&app_data_dir);
+            let folder_path = state.folder_path.lock().ok()?.clone()?;
+
+            let diff = cache.compute_diff(&folder_path)?;
+            if !diff.has_changes() {
+                return None;
+            }
+
+            let cached = cache.load(&folder_path).ok()?;
+            let mut model_guard = state.embedding_model.lock().ok()?;
+            let generator = model_guard.as_mut()?;
+
+            match build_vector_index_incremental_inner(
+                &cache, &folder_path, &diff, cached, generator,
+            ) {
+                Ok((vector_index, total)) => {
+                    if let Ok(mut guard) = state.vector_index.lock() {
+                        *guard = Some(vector_index);
+                    }
+                    Some(total)
+                }
+                Err(e) => {
+                    eprintln!("ベクトルインデックス差分更新失敗: {}", e);
+                    None
+                }
+            }
+        })();
+
+        // フロントエンドに通知（ベクトル更新の成否に関わらず送信）
+        let _ = app_handle.emit(
+            "index-updated",
+            serde_json::json!({
+                "fulltext_count": fulltext_count,
+                "vector_chunk_count": vector_chunk_count.unwrap_or(0),
+            }),
+        );
+    }) {
+        Ok(watcher) => {
+            let mut watcher_guard = state.watcher.lock().map_err(|e| e.to_string())?;
+            *watcher_guard = Some(watcher);
+        }
+        Err(e) => {
+            eprintln!("ファイル監視開始失敗（無視）: {}", e);
+        }
+    }
 
     Ok(count)
 }
@@ -179,16 +263,14 @@ pub fn build_vector_index(
     build_vector_index_full(&app, &cache, &folder_path, generator, &state)
 }
 
-/// 差分更新でベクトルインデックスを構築する
-fn build_vector_index_incremental(
-    app: &tauri::AppHandle,
+/// 差分更新のコアロジック（State非依存）
+fn build_vector_index_incremental_inner(
     cache: &VectorCache,
     folder_path: &str,
     diff: &crate::infra::vector_cache::CacheDiff,
     cached: crate::infra::vector_cache::CachedEmbeddings,
     generator: &mut OnnxEmbeddingGenerator,
-    state: &State<'_, AppState>,
-) -> Result<u64, String> {
+) -> Result<(HnswVectorIndex, u64), String> {
     use std::collections::HashSet;
     use crate::domain::embedding::EmbeddingGenerator;
 
@@ -228,32 +310,19 @@ fn build_vector_index_incremental(
         new_chunks.extend(chunks);
     }
 
-    let new_total = new_chunks.len();
-    let progress_interval = std::cmp::max(new_total / 100, 1);
-
-    for (i, chunk) in new_chunks.iter().enumerate() {
+    for chunk in new_chunks.iter() {
         let text_with_prefix = format!("passage: {}", chunk.text);
         let embedding = generator
             .generate(&text_with_prefix)
             .map_err(|e| format!("embedding生成失敗: {}", e))?;
 
         all_metas.push(crate::infra::hnsw::ChunkMeta {
-            chunk_id: 0, // from_cacheで振り直される
+            chunk_id: 0,
             source_path: chunk.source_path.clone(),
             chunk_index: chunk.chunk_index,
             text: chunk.text.clone(),
         });
         all_embeddings.push(embedding);
-
-        if i % progress_interval == 0 {
-            let _ = app.emit(
-                "vector-index-progress",
-                serde_json::json!({
-                    "current": i + 1,
-                    "total": new_total,
-                }),
-            );
-        }
     }
 
     // chunk_idを振り直す
@@ -274,6 +343,27 @@ fn build_vector_index_incremental(
     if let Err(e) = cache.save(folder_path, vector_index.metas(), &all_embeddings) {
         eprintln!("ベクトルキャッシュ保存失敗（無視）: {}", e);
     }
+
+    Ok((vector_index, total))
+}
+
+/// 差分更新でベクトルインデックスを構築する（コマンド用ラッパー）
+fn build_vector_index_incremental(
+    app: &tauri::AppHandle,
+    cache: &VectorCache,
+    folder_path: &str,
+    diff: &crate::infra::vector_cache::CacheDiff,
+    cached: crate::infra::vector_cache::CachedEmbeddings,
+    generator: &mut OnnxEmbeddingGenerator,
+    state: &State<'_, AppState>,
+) -> Result<u64, String> {
+    let (vector_index, total) =
+        build_vector_index_incremental_inner(cache, folder_path, diff, cached, generator)?;
+
+    let _ = app.emit(
+        "vector-index-progress",
+        serde_json::json!({ "current": total, "total": total }),
+    );
 
     let mut guard = state.vector_index.lock().map_err(|e| e.to_string())?;
     *guard = Some(vector_index);
