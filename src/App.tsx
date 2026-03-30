@@ -63,6 +63,7 @@ function App() {
   const [searchMode, setSearchMode] = useState<SearchMode>("fulltext");
   const [modelReady, setModelReady] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isDownloadingEmbedding, setIsDownloadingEmbedding] = useState(false);
   const [downloadStatus, setDownloadStatus] = useState<string>("");
   const [isBuildingVector, setIsBuildingVector] = useState(false);
   const [vectorProgress, setVectorProgress] = useState<string>("");
@@ -95,9 +96,29 @@ function App() {
 
   // 初期化
   useEffect(() => {
-    isEmbeddingModelReady()
-      .then(setModelReady)
-      .catch(() => setModelReady(false));
+    // Embeddingモデルの確認・自動ダウンロード
+    (async () => {
+      try {
+        const ready = await isEmbeddingModelReady();
+        if (ready) {
+          setModelReady(true);
+          return;
+        }
+        setIsDownloadingEmbedding(true);
+        setIsDownloading(true);
+        setDownloadStatus("Embeddingモデルをダウンロード中...");
+        await downloadEmbeddingModel();
+        setModelReady(true);
+      } catch (e) {
+        console.error("Embeddingモデル自動ダウンロード失敗:", e);
+        setModelReady(false);
+      } finally {
+        setIsDownloadingEmbedding(false);
+        setIsDownloading(false);
+        setDownloadStatus("");
+      }
+    })();
+
     isLlmReady()
       .then(setLlmReady)
       .catch(() => setLlmReady(false));
@@ -389,6 +410,7 @@ function App() {
 
   const handleDownloadEmbeddingModel = useCallback(async () => {
     try {
+      setIsDownloadingEmbedding(true);
       setIsDownloading(true);
       setError(null);
       setDownloadStatus("ダウンロード開始...");
@@ -401,6 +423,7 @@ function App() {
     } catch (e) {
       setError(String(e));
     } finally {
+      setIsDownloadingEmbedding(false);
       setIsDownloading(false);
       setDownloadStatus("");
       await refreshModelStorage();
@@ -560,11 +583,14 @@ function App() {
         recommendations={recommendations}
         downloadedModels={downloadedModels}
         storageUsage={storageUsage}
+        modelReady={modelReady}
         isLoadingLlm={isLoadingLlm}
         switchingModelFilename={switchingModelFilename}
         isDownloading={isDownloading}
+        isDownloadingEmbedding={isDownloadingEmbedding}
         downloadStatus={downloadStatus}
         onDownloadAndLoadLlm={handleDownloadAndLoadLlm}
+        onDownloadEmbeddingModel={handleDownloadEmbeddingModel}
         onDownloadModel={handleDownloadModel}
         onDeleteModel={handleDeleteModel}
         onRegisterCustomModel={async (model) => {
@@ -590,10 +616,16 @@ function App() {
           refreshModelStorage();
         }}
       />
-      {isLoadingLlm && !showSettings && (
+      {(isDownloadingEmbedding || isLoadingLlm) && !showSettings && (
         <div className="loading-overlay">
           <div className="loading-spinner" />
-          <p className="loading-text">LLMモデルをロード中...</p>
+          {isDownloadingEmbedding && (
+            <>
+              <p className="loading-text">Embeddingモデルをダウンロード中...</p>
+              {downloadStatus && <p className="loading-text">{downloadStatus}</p>}
+            </>
+          )}
+          {isLoadingLlm && <p className="loading-text">LLMモデルをロード中...</p>}
         </div>
       )}
       <Sidebar>
@@ -609,12 +641,6 @@ function App() {
         {indexCount > 0 && <p className="index-count">{indexCount} 件のファイル</p>}
 
         <hr className="sidebar-divider" />
-
-        {!modelReady && indexCount > 0 && (
-          <button onClick={handleDownloadEmbeddingModel} disabled={isDownloading}>
-            {isDownloading ? "ダウンロード中..." : "Embeddingモデル取得"}
-          </button>
-        )}
 
         {isBuildingVector && (
           <p className="status-ok">

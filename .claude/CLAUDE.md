@@ -58,6 +58,9 @@ pnpm format
 
 # Rustフォーマットチェック
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+# Embeddingモデル削除（自動ダウンロードの動作確認用）
+rm -f src-tauri/target/debug/models/model.onnx src-tauri/target/debug/models/tokenizer.json
 ```
 
 ## 開発ルール
