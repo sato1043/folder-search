@@ -134,13 +134,17 @@ pub fn folder_hash(folder_path: &str) -> String {
 
 ### 構築フロー
 
+`build_index` コマンドは `async fn` + `tokio::task::spawn_blocking` で実行される。重い処理をブロッキングスレッドにオフロードし、WebViewスレッドを解放することで進捗表示の固まりを防ぐ。
+
 1. `build_index` コマンド呼び出し（フロントエンドから `folder_path` と `total_files` を渡す）
 2. Rust側で `app_data_dir + "/index/" + folder_hash(folder_path) + "/fulltext"` を算出
-3. `TantivySearchEngine::new()` でインデックスを開く（既存あれば open、なければ create）
-4. `delete_all_documents()` で既存データをクリア
-5. フォルダ走査（`.txt`, `.md` のみ）→ ドキュメント追加
-6. `commit()` で永続化
-7. キャンセル対応: `AtomicBool` トークンで100分の1ごとにチェック
+3. `spawn_blocking` 内で以下を実行:
+   - `TantivySearchEngine::new()` でインデックスを開く（既存あれば open、なければ create）
+   - `delete_all_documents()` で既存データをクリア
+   - フォルダ走査（`.txt`, `.md` のみ）→ ドキュメント追加
+   - `commit()` で永続化
+   - キャンセル対応: `AtomicBool` トークンで100分の1ごとにチェック
+   - 進捗通知: `app.emit("fulltext-index-progress")` で100分の1ごとに送信
 
 ### 差分更新
 
@@ -178,9 +182,11 @@ pub struct CachedEmbeddings {
 
 ### 構築フロー（3経路）
 
-1. **キャッシュヒット**: `is_cache_valid()` が true → キャッシュから `load()` → HNSW再構築のみ
-2. **差分更新**: `compute_diff()` で変更検出 → 未変更分を再利用、変更分のみ再生成
-3. **フルビルド**: キャッシュなし → 全ファイルをチャンク分割 → embedding生成 → HNSW構築 → キャッシュ保存
+`build_vector_index` コマンドも `async fn` + `tokio::task::spawn_blocking` で実行される。`embedding_model` を一時的に `take()` で取り出し、`spawn_blocking` に渡す。完了後に返却する。
+
+1. **キャッシュヒット**: `compute_diff()` で差分なし → キャッシュから `load()` → HNSW再構築のみ（軽量なので `spawn_blocking` 不要）
+2. **差分更新**: `compute_diff()` で変更検出 → `spawn_blocking` 内で未変更分を再利用、変更分のみ embedding 再生成
+3. **フルビルド**: キャッシュ不在 → `spawn_blocking` 内で全ファイルをチャンク分割 → embedding生成 → HNSW構築 → キャッシュ保存
 
 ### 中断時の途中保存
 

@@ -203,14 +203,14 @@ src-tauri/src/
 |---|---|---|---|
 | `scan_folder` | folder_path | FolderScanResult | フォルダ軽量スキャン（メタデータのみ、5秒タイムアウト） |
 | `cancel_indexing` | — | () | インデックス作成を中断する |
-| `build_index` | folder_path, total_files | u64 | 全文検索インデックス構築（キャンセル・進捗対応、パスは内部算出） |
+| `build_index` | folder_path, total_files | u64 | 全文検索インデックス構築（async+spawn_blocking、キャンセル・進捗対応） |
 | `search` | query, limit | Vec\<SearchResult\> | 全文検索実行 |
 | `hybrid_search` | query, limit | Vec\<HybridSearchResult\> | ハイブリッド検索実行 |
 | `get_index_status` | — | IndexStatus | インデックス状態取得 |
 | `read_file_content` | path | String | ファイル内容読み取り |
 | `is_embedding_model_ready` | — | bool | embeddingモデルの準備状態 |
 | `download_embedding_model` | — | () | embeddingモデルDL（イベント通知付き） |
-| `build_vector_index` | — | u64 | ベクトルインデックス構築（イベント通知付き） |
+| `build_vector_index` | — | u64 | ベクトルインデックス構築（async+spawn_blocking、イベント通知付き） |
 | `list_available_models` | — | Vec\<LlmModelInfo\> | 利用可能LLMモデル一覧（プリセット+カスタム） |
 | `download_llm_model` | filename, url, size_bytes | () | LLMモデルDL（サイズチェック+LRUエビクション付き） |
 | `load_llm_model` | filename, chat_template, context_length | LlmLoadResult | LLMモデルロード（非同期、spawn_blocking） |
