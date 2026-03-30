@@ -358,7 +358,7 @@ pub async fn download_embedding_model(
 
 /// ベクトルインデックスを構築する
 #[tauri::command]
-pub fn build_vector_index(
+pub async fn build_vector_index(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<u64, String> {
@@ -379,7 +379,7 @@ pub fn build_vector_index(
     // キャッシュ差分を計算
     let diff = cache.compute_diff(&folder_path);
 
-    // 差分なし → キャッシュからロード
+    // 差分なし → キャッシュからロード（軽量なのでspawn_blocking不要）
     if let Some(ref d) = diff {
         if !d.has_changes() {
             if let Ok(cached) = cache.load(&folder_path) {
@@ -398,30 +398,89 @@ pub fn build_vector_index(
         }
     }
 
-    let mut model_guard = state.embedding_model.lock().map_err(|e| e.to_string())?;
-    let generator = model_guard
-        .as_mut()
-        .ok_or_else(|| "embeddingモデルがロードされていない".to_string())?;
+    // 重い処理をブロッキングスレッドで実行（WebViewスレッドを解放）
+    let cancel_token = state.cancel_token.clone();
+    let app_clone = app.clone();
 
-    // 差分あり → 差分更新
-    if let Some(ref d) = diff {
-        if d.has_changes() {
-            if let Ok(cached) = cache.load(&folder_path) {
-                return build_vector_index_incremental(
-                    &app,
-                    &cache,
-                    &folder_path,
-                    d,
-                    cached,
-                    generator,
-                    &state,
-                );
+    // embedding_model を一時的に取り出す
+    let mut generator = {
+        let mut model_guard = state.embedding_model.lock().map_err(|e| e.to_string())?;
+        model_guard
+            .take()
+            .ok_or_else(|| "embeddingモデルがロードされていない".to_string())?
+    };
+
+    let result = tokio::task::spawn_blocking(move || {
+        let result = if let Some(ref d) = diff {
+            if d.has_changes() {
+                if let Ok(cached) = cache.load(&folder_path) {
+                    // 差分更新
+                    let (vector_index, total) = build_vector_index_incremental_inner(
+                        &cache,
+                        &folder_path,
+                        d,
+                        cached,
+                        &mut generator,
+                        Some(&cancel_token),
+                    )?;
+
+                    let _ = app_clone.emit(
+                        "vector-index-progress",
+                        serde_json::json!({ "current": total, "total": total }),
+                    );
+
+                    Ok((vector_index, total, generator))
+                } else {
+                    // キャッシュロード失敗 → フルビルド
+                    build_vector_index_full_inner(
+                        &app_clone,
+                        &cache,
+                        &folder_path,
+                        &mut generator,
+                        &cancel_token,
+                    )
+                    .map(|(vi, total)| (vi, total, generator))
+                }
+            } else {
+                // ここには来ない（差分なしは上で処理済み）
+                Err("予期しない状態".to_string())
             }
+        } else {
+            // キャッシュ不在 → フルビルド
+            build_vector_index_full_inner(
+                &app_clone,
+                &cache,
+                &folder_path,
+                &mut generator,
+                &cancel_token,
+            )
+            .map(|(vi, total)| (vi, total, generator))
+        };
+
+        result
+    })
+    .await
+    .map_err(|e| format!("タスク実行失敗: {}", e))?;
+
+    match result {
+        Ok((vector_index, total, generator)) => {
+            // embedding_model を返却
+            {
+                let mut model_guard = state.embedding_model.lock().map_err(|e| e.to_string())?;
+                *model_guard = Some(generator);
+            }
+            {
+                let mut guard = state.vector_index.lock().map_err(|e| e.to_string())?;
+                *guard = Some(vector_index);
+            }
+            Ok(total)
+        }
+        Err(e) => {
+            // エラー時もembedding_modelは失われている → ここでは復元できない
+            // （generatorはspawn_blocking内で消費済み）
+            Err(e)
         }
     }
-
-    // キャッシュ不在 → フルビルド
-    build_vector_index_full(&app, &cache, &folder_path, generator, &state)
 }
 
 /// 差分更新のコアロジック（State非依存）
@@ -542,49 +601,16 @@ fn build_vector_index_incremental_inner(
     Ok((vector_index, total))
 }
 
-/// 差分更新でベクトルインデックスを構築する��コマンド用ラッパー）
-fn build_vector_index_incremental(
-    app: &tauri::AppHandle,
-    cache: &VectorCache,
-    folder_path: &str,
-    diff: &crate::infra::vector_cache::CacheDiff,
-    cached: crate::infra::vector_cache::CachedEmbeddings,
-    generator: &mut OnnxEmbeddingGenerator,
-    state: &State<'_, AppState>,
-) -> Result<u64, String> {
-    let cancel_token = &state.cancel_token;
-    let (vector_index, total) = build_vector_index_incremental_inner(
-        cache,
-        folder_path,
-        diff,
-        cached,
-        generator,
-        Some(cancel_token),
-    )?;
-
-    let _ = app.emit(
-        "vector-index-progress",
-        serde_json::json!({ "current": total, "total": total }),
-    );
-
-    let mut guard = state.vector_index.lock().map_err(|e| e.to_string())?;
-    *guard = Some(vector_index);
-
-    Ok(total)
-}
-
-/// フルビルドでベクトルインデックスを構築する
-fn build_vector_index_full(
+/// フルビルドでベクトルインデックスを構築する（State非依存）
+fn build_vector_index_full_inner(
     app: &tauri::AppHandle,
     cache: &VectorCache,
     folder_path: &str,
     generator: &mut OnnxEmbeddingGenerator,
-    state: &State<'_, AppState>,
-) -> Result<u64, String> {
+    cancel_token: &AtomicBool,
+) -> Result<(HnswVectorIndex, u64), String> {
     use crate::domain::embedding::EmbeddingGenerator;
     use std::collections::HashSet;
-
-    let cancel_token = &state.cancel_token;
 
     // ファイル走査・チャンク分割
     let mut all_chunks = Vec::new();
@@ -685,10 +711,7 @@ fn build_vector_index_full(
         eprintln!("ベクトルキャッシュ保存失敗（無視）: {}", e);
     }
 
-    let mut guard = state.vector_index.lock().map_err(|e| e.to_string())?;
-    *guard = Some(vector_index);
-
-    Ok(total)
+    Ok((vector_index, total))
 }
 
 /// ベクトルembeddingの途中保存を行う
