@@ -60,9 +60,6 @@ export type IndexingPhase =
   | { kind: "done"; fulltextCount: number; vectorChunks: number }
   | { kind: "cancelled"; fulltextCount: number; vectorChunks?: number };
 
-/** 検索モード */
-export type SearchMode = "fulltext" | "hybrid";
-
 /** チャットテンプレート */
 export type ChatTemplateType = "chatml" | "gemma" | "llama3";
 

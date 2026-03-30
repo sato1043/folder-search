@@ -41,7 +41,6 @@ import type {
   DownloadProgress,
   VectorIndexProgress,
   FulltextIndexProgress,
-  SearchMode,
   IndexingPhase,
   LlmModelInfo,
   SystemInfo,
@@ -60,7 +59,6 @@ function App() {
   const [indexCount, setIndexCount] = useState<number>(0);
   const [isIndexing, setIsIndexing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [searchMode, setSearchMode] = useState<SearchMode>("fulltext");
   const [modelReady, setModelReady] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [isDownloadingEmbedding, setIsDownloadingEmbedding] = useState(false);
@@ -508,7 +506,7 @@ function App() {
       try {
         setError(null);
         let searchResults: SearchResult[];
-        if (searchMode === "hybrid") {
+        if (modelReady && vectorChunkCount > 0) {
           searchResults = await hybridSearch(query);
         } else {
           searchResults = await search(query);
@@ -520,7 +518,7 @@ function App() {
         setError(String(e));
       }
     },
-    [searchMode],
+    [modelReady, vectorChunkCount],
   );
 
   const handleChat = useCallback(async (question: string) => {
@@ -561,8 +559,6 @@ function App() {
       setError(String(e));
     }
   }, []);
-
-  const canHybridSearch = modelReady && vectorChunkCount > 0;
 
   return (
     <div className="app">
@@ -629,14 +625,6 @@ function App() {
         </div>
       )}
       <Sidebar>
-        <div className="sidebar-header">
-          <button onClick={handleSelectFolder} disabled={isIndexing || isBuildingVector}>
-            フォルダを選択
-          </button>
-          <button className="settings-icon-btn" onClick={() => setShowSettings(true)} title="設定">
-            &#9881;
-          </button>
-        </div>
         {folderPath && <p className="folder-path">{folderPath}</p>}
         {indexCount > 0 && <p className="index-count">{indexCount} 件のファイル</p>}
 
@@ -680,37 +668,29 @@ function App() {
             チャットモード
           </label>
         </div>
-
-        {appMode === "search" && (
-          <div className="search-mode-selector">
-            <label>
-              <input
-                type="radio"
-                name="searchMode"
-                value="fulltext"
-                checked={searchMode === "fulltext"}
-                onChange={() => setSearchMode("fulltext")}
-              />
-              全文検索
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="searchMode"
-                value="hybrid"
-                checked={searchMode === "hybrid"}
-                onChange={() => setSearchMode("hybrid")}
-                disabled={!canHybridSearch}
-              />
-              ハイブリッド検索
-            </label>
-          </div>
-        )}
       </Sidebar>
       <MainPanel>
         {appMode === "search" ? (
           <>
-            <SearchBar onSearch={handleSearch} disabled={indexCount === 0 || isLoadingLlm} />
+            <SearchBar onSearch={handleSearch} disabled={indexCount === 0 || isLoadingLlm}>
+              <button
+                className="search-bar-icon-btn"
+                onClick={handleSelectFolder}
+                disabled={isIndexing || isBuildingVector}
+                title="フォルダを選択"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.172a1.5 1.5 0 0 1 1.06.44l.829.828a.5.5 0 0 0 .353.146H13.5A1.5 1.5 0 0 1 15 4.914V12.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9z" />
+                </svg>
+              </button>
+              <button
+                className="search-bar-icon-btn"
+                onClick={() => setShowSettings(true)}
+                title="設定"
+              >
+                &#9881;
+              </button>
+            </SearchBar>
             {error && <p className="error-message">{error}</p>}
             <div className="content-area">
               <ResultList results={results} onSelect={handleSelectResult} />
@@ -723,7 +703,25 @@ function App() {
               onSearch={handleChat}
               disabled={!llmReady || isChatting}
               placeholder="質問を入力..."
-            />
+            >
+              <button
+                className="search-bar-icon-btn"
+                onClick={handleSelectFolder}
+                disabled={isIndexing || isBuildingVector}
+                title="フォルダを選択"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.172a1.5 1.5 0 0 1 1.06.44l.829.828a.5.5 0 0 0 .353.146H13.5A1.5 1.5 0 0 1 15 4.914V12.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9z" />
+                </svg>
+              </button>
+              <button
+                className="search-bar-icon-btn"
+                onClick={() => setShowSettings(true)}
+                title="設定"
+              >
+                &#9881;
+              </button>
+            </SearchBar>
             {error && <p className="error-message">{error}</p>}
             <div className="content-area">
               <div className="chat-panel">

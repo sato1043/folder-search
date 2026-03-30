@@ -223,20 +223,6 @@
   font-size: 12px;
 }
 
-.search-mode-selector {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 13px;
-}
-
-.search-mode-selector label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-}
-
 @media (prefers-color-scheme: dark) {
   .sidebar {
     border-right-color: #444;
@@ -315,16 +301,33 @@
 
 /* Search Bar */
 .search-bar {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
   margin-bottom: 12px;
 }
 
 .search-bar input {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   padding: 10px 14px;
   border: 1px solid #ccc;
   border-radius: 6px;
   font-size: 16px;
   outline: none;
+}
+
+.search-bar-icon-btn {
+  padding: 6px 10px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .search-bar input:focus {
@@ -340,6 +343,11 @@
   }
   .search-bar input:focus {
     border-color: #6090ff;
+  }
+  .search-bar-icon-btn {
+    background: #3a3a3a;
+    border-color: #555;
+    color: #f6f6f6;
   }
 }
 
@@ -689,24 +697,6 @@
     background: #c62828;
     border-color: #c62828;
   }
-}
-
-/* Sidebar header */
-.sidebar-header {
-  display: flex;
-  gap: 6px;
-  align-items: stretch;
-}
-
-.sidebar-header > button:first-child {
-  flex: 1;
-}
-
-.settings-icon-btn {
-  padding: 6px 10px;
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
 }
 
 /* Settings Dialog */
