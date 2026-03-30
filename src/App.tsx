@@ -1,6 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { appDataDir } from "@tauri-apps/api/path";
 import { listen } from "@tauri-apps/api/event";
 import { Sidebar } from "./components/layout/Sidebar";
 import { MainPanel } from "./components/layout/MainPanel";
@@ -307,8 +306,7 @@ function App() {
           setIndexingPhase({ kind: "fulltext", current: 0, total: fileCount });
         }
 
-        const indexPath = (await appDataDir()) + "/index/fulltext";
-        const count = await buildIndex(selected, indexPath, fileCount);
+        const count = await buildIndex(selected, fileCount);
         setIndexCount(count);
         setIsIndexing(false);
 

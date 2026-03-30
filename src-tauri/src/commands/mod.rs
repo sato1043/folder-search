@@ -150,10 +150,16 @@ pub fn cancel_indexing(state: State<'_, AppState>) {
 pub fn build_index(
     app: tauri::AppHandle,
     folder_path: String,
-    index_path: String,
     total_files: u64,
     state: State<'_, AppState>,
 ) -> Result<u64, String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let index_path = app_data_dir
+        .join("index")
+        .join("fulltext")
+        .join(vector_cache::folder_hash(&folder_path));
+    let index_path_str = index_path.to_string_lossy().to_string();
+
     // キャンセルトークンをリセット
     state.cancel_token.store(false, Ordering::Relaxed);
 
@@ -163,7 +169,7 @@ pub fn build_index(
         *watcher_guard = None;
     }
 
-    let mut engine = TantivySearchEngine::new(&index_path)
+    let mut engine = TantivySearchEngine::new(&index_path_str)
         .map_err(|e| format!("インデックス作成失敗: {}", e))?;
 
     let cancel_token = &state.cancel_token;
@@ -1158,14 +1164,10 @@ pub fn validate_folder_indexes(
     state: State<'_, AppState>,
 ) -> Result<IndexValidationResult, String> {
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let fulltext_path = app_data_dir.join("index").join("fulltext");
+    let hash = vector_cache::folder_hash(&folder_path);
+    let fulltext_path = app_data_dir.join("index").join("fulltext").join(&hash);
     let cache = VectorCache::new(&app_data_dir);
     let cache_dir = cache.cache_dir_for(&folder_path);
-    let hash = cache_dir
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
-        .to_string();
 
     let validation = &state.index_validation;
 

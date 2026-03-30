@@ -64,16 +64,26 @@ pub fn run() {
             if let Ok(app_data_dir) = app.path().app_data_dir() {
                 let validation = state.index_validation.clone();
                 std::thread::spawn(move || {
-                    // 全文検索インデックスの検証
-                    let fulltext_path = app_data_dir.join("index").join("fulltext");
-                    if !tantivy_infra::validate_index(&fulltext_path) {
-                        eprintln!(
-                            "BG検証: 全文検索インデックスの破損を検出、削除: {:?}",
-                            fulltext_path
-                        );
-                        let _ = std::fs::remove_dir_all(&fulltext_path);
+                    // 全文検索インデックスの検証（フォルダごとのサブディレクトリを列挙）
+                    let fulltext_base = app_data_dir.join("index").join("fulltext");
+                    if fulltext_base.exists() {
+                        if let Ok(entries) = std::fs::read_dir(&fulltext_base) {
+                            for entry in entries.flatten() {
+                                let path = entry.path();
+                                if !path.is_dir() {
+                                    continue;
+                                }
+                                if !tantivy_infra::validate_index(&path) {
+                                    eprintln!(
+                                        "BG検証: 全文検索インデックスの破損を検出、削除: {:?}",
+                                        path
+                                    );
+                                    let _ = std::fs::remove_dir_all(&path);
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(100));
+                            }
+                        }
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
 
                     // ベクトルキャッシュの検証
                     let cache = vector_cache::VectorCache::new(&app_data_dir);

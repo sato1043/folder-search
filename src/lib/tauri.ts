@@ -19,12 +19,8 @@ export async function cancelIndexing(): Promise<void> {
   return invoke<void>("cancel_indexing");
 }
 
-export async function buildIndex(
-  folderPath: string,
-  indexPath: string,
-  totalFiles: number,
-): Promise<number> {
-  return invoke<number>("build_index", { folderPath, indexPath, totalFiles });
+export async function buildIndex(folderPath: string, totalFiles: number): Promise<number> {
+  return invoke<number>("build_index", { folderPath, totalFiles });
 }
 
 export async function search(query: string, limit: number = 20): Promise<SearchResult[]> {

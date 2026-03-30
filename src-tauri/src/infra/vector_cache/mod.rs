@@ -9,6 +9,14 @@ use crate::infra::hnsw::ChunkMeta;
 
 const FORMAT_VERSION: u32 = 1;
 
+/// フォルダパスからキャッシュ用ハッシュ文字列（SHA256先頭16文字）を生成する
+pub fn folder_hash(folder_path: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(folder_path.as_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+    hash[..16].to_string()
+}
+
 /// キャッシュのマニフェスト
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CacheManifest {
@@ -62,10 +70,7 @@ impl VectorCache {
 
     /// フォルダパスからキャッシュディレクトリを算出する
     pub fn cache_dir_for(&self, folder_path: &str) -> PathBuf {
-        let mut hasher = Sha256::new();
-        hasher.update(folder_path.as_bytes());
-        let hash = format!("{:x}", hasher.finalize());
-        self.base_dir.join(&hash[..16])
+        self.base_dir.join(folder_hash(folder_path))
     }
 
     /// フォルダ内の対象ファイルのフィンガープリントを収集する

@@ -21,7 +21,7 @@
 
 - [x] tantivy + lindera（IPAdic辞書）による日本語全文検索
 - [x] フォルダ選択ダイアログ（Tauri plugin-dialog）
-- [x] ファイル走査・インデックス構築
+- [x] ファイル走査・インデックス構築（フォルダごとにキャッシュ保持）
 - [x] BM25スコアリング + スニペット生成
 - [x] 検索UI（SearchBar, ResultList, Preview）
 - [x] インデックス状態の表示（件数）
