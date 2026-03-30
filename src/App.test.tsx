@@ -3,8 +3,8 @@ import { describe, it, expect } from "vitest";
 import App from "./App";
 
 describe("App", () => {
-  it("サイドバーにアプリ名を表示する", () => {
+  it("サイドバーを表示する", () => {
     render(<App />);
-    expect(screen.getByText("Folder Search")).toBeInTheDocument();
+    expect(screen.getByRole("complementary")).toBeInTheDocument();
   });
 });

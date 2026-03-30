@@ -1,12 +1,18 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 type SearchBarProps = {
   onSearch: (query: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  children?: ReactNode;
 };
 
-export function SearchBar({ onSearch, disabled, placeholder = "検索..." }: SearchBarProps) {
+export function SearchBar({
+  onSearch,
+  disabled,
+  placeholder = "検索...",
+  children,
+}: SearchBarProps) {
   const [query, setQuery] = useState("");
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -25,6 +31,7 @@ export function SearchBar({ onSearch, disabled, placeholder = "検索..." }: Sea
         onKeyDown={handleKeyDown}
         disabled={disabled}
       />
+      {children}
     </div>
   );
 }

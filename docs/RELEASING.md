@@ -82,7 +82,7 @@ git push origin main --tags
 | プラットフォーム | ランナー | 成果物 |
 |---|---|---|
 | Windows | windows-latest | `.msi`, `.exe` |
-| macOS (Intel) | macos-13 | `.dmg` |
+| macOS (Intel) | macos-14 | `.dmg` |
 | macOS (Apple Silicon) | macos-latest | `.dmg` |
 
 ビルド完了後、**ドラフトリリース**としてGitHub Releasesに成果物がアップロードされる。

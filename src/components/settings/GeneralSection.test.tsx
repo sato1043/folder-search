@@ -64,6 +64,10 @@ const defaultProps = {
   initialLoadedModel: null,
   recommendations: testRecommendations,
   downloadedModels: testDownloaded,
+  modelReady: true,
+  isDownloadingEmbedding: false,
+  embeddingDownloadStatus: "",
+  onDownloadEmbeddingModel: vi.fn(),
   isLoadingLlm: false,
   switchingModelFilename: null,
   downloadStatus: "",
@@ -71,6 +75,49 @@ const defaultProps = {
 };
 
 describe("GeneralSection", () => {
+  it("ベクトル検索モデルセクションを表示する", () => {
+    render(<GeneralSection {...defaultProps} />);
+    expect(screen.getByText("ベクトル検索モデル")).toBeInTheDocument();
+  });
+
+  it("Embeddingモデルがダウンロード済みの場合「ダウンロード済み」を表示する", () => {
+    render(<GeneralSection {...defaultProps} modelReady={true} />);
+    expect(screen.getByText(/ダウンロード済み/)).toBeInTheDocument();
+  });
+
+  it("Embeddingモデルが未DLの場合「未ダウンロード」とダウンロードボタンを表示する", () => {
+    render(<GeneralSection {...defaultProps} modelReady={false} />);
+    expect(screen.getByText(/未ダウンロード/)).toBeInTheDocument();
+    expect(screen.getByTitle("Embeddingモデルをダウンロード")).toBeInTheDocument();
+  });
+
+  it("ダウンロードボタン押下でonDownloadEmbeddingModelが呼ばれる", () => {
+    const onDownloadEmbeddingModel = vi.fn();
+    render(
+      <GeneralSection
+        {...defaultProps}
+        modelReady={false}
+        onDownloadEmbeddingModel={onDownloadEmbeddingModel}
+      />,
+    );
+    fireEvent.click(screen.getByTitle("Embeddingモデルをダウンロード"));
+    expect(onDownloadEmbeddingModel).toHaveBeenCalled();
+  });
+
+  it("Embeddingダウンロード中は「ダウンロード中...」を表示しボタンを非表示にする", () => {
+    render(
+      <GeneralSection
+        {...defaultProps}
+        modelReady={false}
+        isDownloadingEmbedding={true}
+        embeddingDownloadStatus="model.onnx: 45%"
+      />,
+    );
+    expect(screen.getByText(/ダウンロード中\.\.\./)).toBeInTheDocument();
+    expect(screen.queryByTitle("Embeddingモデルをダウンロード")).not.toBeInTheDocument();
+    expect(screen.getByText("model.onnx: 45%")).toBeInTheDocument();
+  });
+
   it("モデルリストを表示する", () => {
     render(<GeneralSection {...defaultProps} />);
     expect(screen.getByText("Model A")).toBeInTheDocument();

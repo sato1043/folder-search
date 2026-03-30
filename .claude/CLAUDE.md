@@ -58,7 +58,30 @@ pnpm format
 
 # Rustフォーマットチェック
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+# Embeddingモデル削除（自動ダウンロードの動作確認用）
+rm -f src-tauri/target/debug/models/model.onnx src-tauri/target/debug/models/tokenizer.json
 ```
+
+## データ保存場所
+
+### モデルディレクトリ（models/）
+
+実行バイナリの隣の `models/` ディレクトリ。開発時は `src-tauri/target/debug/models/`。
+
+### アプリデータディレクトリ（appDataDir）
+
+Tauri の `appDataDir` に対応する。identifier は `com.foldersearch.desktop`。
+
+| OS | パス |
+|----|------|
+| Linux | `~/.local/share/com.foldersearch.desktop/` |
+| Windows | `%APPDATA%/com.foldersearch.desktop/` |
+| macOS | `~/Library/Application Support/com.foldersearch.desktop/` |
+
+主な内容:
+- `index/{hash}/fulltext/` — tantivy 全文検索インデックス（フォルダごと）
+- `index/{hash}/vector/` — ベクトルキャッシュ（manifest.json + embeddings.bin、フォルダごと）
 
 ## 開発ルール
 
@@ -68,6 +91,8 @@ cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 - テストコードを先に書き、失敗を確認してから実装する
 - E2Eテストを必ず検討する（自動化不可の場合は手動テスト項目に追記）
 - コミット前にlint・フォーマット・テストを実行する
+- コミット前に設計ドキュメントを更新する。必要ならドキュメントを統廃合する。
+- コミット前にテストコードとE2Eテスト、手動テスト項目の追加更新を検討する。
 - MLモデル（ONNX, GGUF）はリポジトリにコミットしない（実行時にダウンロード）
 - バージョン番号（package.json, Cargo.toml, tauri.conf.json）はリリース時にのみ更新する。通常の開発中は変更しない。手順は docs/RELEASING.md を参照
 

@@ -1,6 +1,5 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { appDataDir } from "@tauri-apps/api/path";
 import { listen } from "@tauri-apps/api/event";
 import { Sidebar } from "./components/layout/Sidebar";
 import { MainPanel } from "./components/layout/MainPanel";
@@ -9,7 +8,10 @@ import { ResultList } from "./components/search/ResultList";
 import { Preview } from "./components/search/Preview";
 import { ChatMessage } from "./components/chat/ChatMessage";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
+import { IndexingDialog } from "./components/indexing/IndexingDialog";
 import {
+  scanFolder,
+  cancelIndexing,
   buildIndex,
   search,
   hybridSearch,
@@ -32,12 +34,14 @@ import {
   getStorageUsage,
   registerCustomModel,
   unregisterCustomModel,
+  validateFolderIndexes,
 } from "./lib/tauri";
 import type {
   SearchResult,
   DownloadProgress,
   VectorIndexProgress,
-  SearchMode,
+  FulltextIndexProgress,
+  IndexingPhase,
   LlmModelInfo,
   SystemInfo,
   ModelRecommendation,
@@ -55,9 +59,9 @@ function App() {
   const [indexCount, setIndexCount] = useState<number>(0);
   const [isIndexing, setIsIndexing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [searchMode, setSearchMode] = useState<SearchMode>("fulltext");
   const [modelReady, setModelReady] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isDownloadingEmbedding, setIsDownloadingEmbedding] = useState(false);
   const [downloadStatus, setDownloadStatus] = useState<string>("");
   const [isBuildingVector, setIsBuildingVector] = useState(false);
   const [vectorProgress, setVectorProgress] = useState<string>("");
@@ -84,11 +88,35 @@ function App() {
   // 設定ダイアログ
   const [showSettings, setShowSettings] = useState(false);
 
+  // インデックス作成ダイアログ
+  const [indexingPhase, setIndexingPhase] = useState<IndexingPhase | null>(null);
+  const pendingFolderRef = useRef<string | null>(null);
+
   // 初期化
   useEffect(() => {
-    isEmbeddingModelReady()
-      .then(setModelReady)
-      .catch(() => setModelReady(false));
+    // Embeddingモデルの確認・自動ダウンロード
+    (async () => {
+      try {
+        const ready = await isEmbeddingModelReady();
+        if (ready) {
+          setModelReady(true);
+          return;
+        }
+        setIsDownloadingEmbedding(true);
+        setIsDownloading(true);
+        setDownloadStatus("Embeddingモデルをダウンロード中...");
+        await downloadEmbeddingModel();
+        setModelReady(true);
+      } catch (e) {
+        console.error("Embeddingモデル自動ダウンロード失敗:", e);
+        setModelReady(false);
+      } finally {
+        setIsDownloadingEmbedding(false);
+        setIsDownloading(false);
+        setDownloadStatus("");
+      }
+    })();
+
     isLlmReady()
       .then(setLlmReady)
       .catch(() => setLlmReady(false));
@@ -158,12 +186,34 @@ function App() {
     };
   }, []);
 
+  // 全文検索インデックス構築進捗のリスナー
+  useEffect(() => {
+    const unlisten = listen<FulltextIndexProgress>("fulltext-index-progress", (event) => {
+      const p = event.payload;
+      setIndexingPhase((prev) => {
+        if (prev && (prev.kind === "fulltext" || prev.kind === "confirm")) {
+          return { kind: "fulltext", current: p.current, total: p.total };
+        }
+        return prev;
+      });
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
+
   // ベクトルインデックス構築進捗のリスナー
   useEffect(() => {
     const unlisten = listen<VectorIndexProgress>("vector-index-progress", (event) => {
       const p = event.payload;
       const pct = p.total > 0 ? Math.round((p.current / p.total) * 100) : 0;
       setVectorProgress(`${pct}%`);
+      setIndexingPhase((prev) => {
+        if (prev && (prev.kind === "vector" || prev.kind === "fulltext")) {
+          return { kind: "vector", current: p.current, total: p.total };
+        }
+        return prev;
+      });
     });
     return () => {
       unlisten.then((f) => f());
@@ -224,31 +274,146 @@ function App() {
     }
   }, []);
 
-  const handleSelectFolder = useCallback(async () => {
-    try {
-      const selected = await open({ directory: true, multiple: false });
-      if (selected) {
-        setFolderPath(selected as string);
+  /** 確認ダイアログが必要か判定する */
+  const needsConfirmation = useCallback(
+    (scan: {
+      file_count: number;
+      total_size_bytes: number;
+      estimated_chunks: number;
+      max_file_size_bytes: number;
+      timed_out: boolean;
+    }) => {
+      return (
+        scan.file_count >= 500 ||
+        scan.total_size_bytes >= 100 * 1024 * 1024 ||
+        scan.estimated_chunks >= 40000 ||
+        scan.max_file_size_bytes >= 10 * 1024 * 1024 ||
+        scan.timed_out
+      );
+    },
+    [],
+  );
+
+  /** インデックス構築を実行する（確認ダイアログ経由 or 直接） */
+  const executeIndexBuild = useCallback(
+    async (selected: string, fileCount: number) => {
+      try {
+        setFolderPath(selected);
         setIsIndexing(true);
         setError(null);
 
-        const indexPath = (await appDataDir()) + "/index/fulltext";
-        const count = await buildIndex(selected as string, indexPath);
+        if (indexingPhase) {
+          setIndexingPhase({ kind: "fulltext", current: 0, total: fileCount });
+        }
+
+        const count = await buildIndex(selected, fileCount);
         setIndexCount(count);
         setIsIndexing(false);
 
         if (modelReady && count > 0) {
-          await triggerBuildVectorIndex();
+          if (indexingPhase) {
+            setIndexingPhase({ kind: "vector", current: 0, total: 0 });
+          }
+          setIsBuildingVector(true);
+          setVectorProgress("");
+          await new Promise((r) => requestAnimationFrame(r));
+          const chunkCount = await buildVectorIndex();
+          setVectorChunkCount(chunkCount);
+          setIsBuildingVector(false);
+          setVectorProgress("");
+
+          if (indexingPhase) {
+            setIndexingPhase({ kind: "done", fulltextCount: count, vectorChunks: chunkCount });
+          }
+        } else {
+          if (indexingPhase) {
+            setIndexingPhase({ kind: "done", fulltextCount: count, vectorChunks: 0 });
+          }
         }
+      } catch (e) {
+        const msg = String(e);
+        if (msg.includes("中断")) {
+          // 中断された場合
+          setIsIndexing(false);
+          setIsBuildingVector(false);
+          setVectorProgress("");
+          setIndexingPhase({
+            kind: "cancelled",
+            fulltextCount: indexCount,
+            vectorChunks: undefined,
+          });
+        } else {
+          setError(msg);
+          setIsIndexing(false);
+          setIsBuildingVector(false);
+          setIndexingPhase(null);
+        }
+      }
+    },
+    [modelReady, indexingPhase, indexCount],
+  );
+
+  const handleSelectFolder = useCallback(async () => {
+    try {
+      const selected = await open({ directory: true, multiple: false });
+      if (!selected) return;
+
+      // インデックスの破損検査（バックグラウンド検証との競合制御込み）
+      const validation = await validateFolderIndexes(selected as string);
+      if (validation.fulltext_removed || validation.vector_cache_removed) {
+        console.warn("破損インデックスを削除:", validation);
+      }
+
+      const scan = await scanFolder(selected as string);
+
+      if (scan.file_count === 0) {
+        setError("対象ファイル（.txt / .md）が見つからない");
+        return;
+      }
+
+      if (needsConfirmation(scan)) {
+        // 確認ダイアログを表示
+        pendingFolderRef.current = selected as string;
+        setIndexingPhase({ kind: "confirm", scanResult: scan });
+      } else {
+        // 閾値未満 → 即座に実行
+        await executeIndexBuild(selected as string, scan.file_count);
       }
     } catch (e) {
       setError(String(e));
       setIsIndexing(false);
     }
-  }, [modelReady, triggerBuildVectorIndex]);
+  }, [needsConfirmation, executeIndexBuild]);
+
+  /** ダイアログの[開始]ボタン */
+  const handleIndexingStart = useCallback(async () => {
+    const folder = pendingFolderRef.current;
+    if (!folder || !indexingPhase || indexingPhase.kind !== "confirm") return;
+    const fileCount = indexingPhase.scanResult.file_count;
+    await executeIndexBuild(folder, fileCount);
+  }, [indexingPhase, executeIndexBuild]);
+
+  /** ダイアログの[中断]ボタン */
+  const handleIndexingCancel = useCallback(async () => {
+    if (indexingPhase?.kind === "confirm") {
+      // 確認画面でのキャンセル → ダイアログを閉じるだけ
+      setIndexingPhase(null);
+      pendingFolderRef.current = null;
+      return;
+    }
+    // 実行中の中断
+    await cancelIndexing();
+  }, [indexingPhase]);
+
+  /** ダイアログの[OK]/クローズ */
+  const handleIndexingClose = useCallback(() => {
+    setIndexingPhase(null);
+    pendingFolderRef.current = null;
+  }, []);
 
   const handleDownloadEmbeddingModel = useCallback(async () => {
     try {
+      setIsDownloadingEmbedding(true);
       setIsDownloading(true);
       setError(null);
       setDownloadStatus("ダウンロード開始...");
@@ -261,6 +426,7 @@ function App() {
     } catch (e) {
       setError(String(e));
     } finally {
+      setIsDownloadingEmbedding(false);
       setIsDownloading(false);
       setDownloadStatus("");
       await refreshModelStorage();
@@ -345,7 +511,7 @@ function App() {
       try {
         setError(null);
         let searchResults: SearchResult[];
-        if (searchMode === "hybrid") {
+        if (modelReady && vectorChunkCount > 0) {
           searchResults = await hybridSearch(query);
         } else {
           searchResults = await search(query);
@@ -357,7 +523,7 @@ function App() {
         setError(String(e));
       }
     },
-    [searchMode],
+    [modelReady, vectorChunkCount],
   );
 
   const handleChat = useCallback(async (question: string) => {
@@ -399,10 +565,16 @@ function App() {
     }
   }, []);
 
-  const canHybridSearch = modelReady && vectorChunkCount > 0;
-
   return (
     <div className="app">
+      {indexingPhase && (
+        <IndexingDialog
+          phase={indexingPhase}
+          onStart={handleIndexingStart}
+          onCancel={handleIndexingCancel}
+          onClose={handleIndexingClose}
+        />
+      )}
       <SettingsDialog
         isOpen={showSettings}
         diskFreeBytes={storageUsage?.disk_free_bytes ?? 0}
@@ -412,11 +584,14 @@ function App() {
         recommendations={recommendations}
         downloadedModels={downloadedModels}
         storageUsage={storageUsage}
+        modelReady={modelReady}
         isLoadingLlm={isLoadingLlm}
         switchingModelFilename={switchingModelFilename}
         isDownloading={isDownloading}
+        isDownloadingEmbedding={isDownloadingEmbedding}
         downloadStatus={downloadStatus}
         onDownloadAndLoadLlm={handleDownloadAndLoadLlm}
+        onDownloadEmbeddingModel={handleDownloadEmbeddingModel}
         onDownloadModel={handleDownloadModel}
         onDeleteModel={handleDeleteModel}
         onRegisterCustomModel={async (model) => {
@@ -442,31 +617,23 @@ function App() {
           refreshModelStorage();
         }}
       />
-      {isLoadingLlm && !showSettings && (
+      {(isDownloadingEmbedding || isLoadingLlm) && !showSettings && (
         <div className="loading-overlay">
           <div className="loading-spinner" />
-          <p className="loading-text">LLMモデルをロード中...</p>
+          {isDownloadingEmbedding && (
+            <>
+              <p className="loading-text">Embeddingモデルをダウンロード中...</p>
+              {downloadStatus && <p className="loading-text">{downloadStatus}</p>}
+            </>
+          )}
+          {isLoadingLlm && <p className="loading-text">LLMモデルをロード中...</p>}
         </div>
       )}
       <Sidebar>
-        <div className="sidebar-header">
-          <button onClick={handleSelectFolder} disabled={isIndexing || isBuildingVector}>
-            フォルダを選択
-          </button>
-          <button className="settings-icon-btn" onClick={() => setShowSettings(true)} title="設定">
-            &#9881;
-          </button>
-        </div>
         {folderPath && <p className="folder-path">{folderPath}</p>}
         {indexCount > 0 && <p className="index-count">{indexCount} 件のファイル</p>}
 
         <hr className="sidebar-divider" />
-
-        {!modelReady && indexCount > 0 && (
-          <button onClick={handleDownloadEmbeddingModel} disabled={isDownloading}>
-            {isDownloading ? "ダウンロード中..." : "Embeddingモデル取得"}
-          </button>
-        )}
 
         {isBuildingVector && (
           <p className="status-ok">
@@ -506,37 +673,29 @@ function App() {
             チャットモード
           </label>
         </div>
-
-        {appMode === "search" && (
-          <div className="search-mode-selector">
-            <label>
-              <input
-                type="radio"
-                name="searchMode"
-                value="fulltext"
-                checked={searchMode === "fulltext"}
-                onChange={() => setSearchMode("fulltext")}
-              />
-              全文検索
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="searchMode"
-                value="hybrid"
-                checked={searchMode === "hybrid"}
-                onChange={() => setSearchMode("hybrid")}
-                disabled={!canHybridSearch}
-              />
-              ハイブリッド検索
-            </label>
-          </div>
-        )}
       </Sidebar>
       <MainPanel>
         {appMode === "search" ? (
           <>
-            <SearchBar onSearch={handleSearch} disabled={indexCount === 0 || isLoadingLlm} />
+            <SearchBar onSearch={handleSearch} disabled={indexCount === 0 || isLoadingLlm}>
+              <button
+                className="search-bar-icon-btn"
+                onClick={handleSelectFolder}
+                disabled={isIndexing || isBuildingVector}
+                title="フォルダを選択"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.172a1.5 1.5 0 0 1 1.06.44l.829.828a.5.5 0 0 0 .353.146H13.5A1.5 1.5 0 0 1 15 4.914V12.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9z" />
+                </svg>
+              </button>
+              <button
+                className="search-bar-icon-btn"
+                onClick={() => setShowSettings(true)}
+                title="設定"
+              >
+                &#9881;
+              </button>
+            </SearchBar>
             {error && <p className="error-message">{error}</p>}
             <div className="content-area">
               <ResultList results={results} onSelect={handleSelectResult} />
@@ -549,7 +708,25 @@ function App() {
               onSearch={handleChat}
               disabled={!llmReady || isChatting}
               placeholder="質問を入力..."
-            />
+            >
+              <button
+                className="search-bar-icon-btn"
+                onClick={handleSelectFolder}
+                disabled={isIndexing || isBuildingVector}
+                title="フォルダを選択"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.172a1.5 1.5 0 0 1 1.06.44l.829.828a.5.5 0 0 0 .353.146H13.5A1.5 1.5 0 0 1 15 4.914V12.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9z" />
+                </svg>
+              </button>
+              <button
+                className="search-bar-icon-btn"
+                onClick={() => setShowSettings(true)}
+                title="設定"
+              >
+                &#9881;
+              </button>
+            </SearchBar>
             {error && <p className="error-message">{error}</p>}
             <div className="content-area">
               <div className="chat-panel">

@@ -5,10 +5,5 @@ type SidebarProps = {
 };
 
 export function Sidebar({ children }: SidebarProps) {
-  return (
-    <aside className="sidebar">
-      <h2>Folder Search</h2>
-      {children}
-    </aside>
-  );
+  return <aside className="sidebar">{children}</aside>;
 }

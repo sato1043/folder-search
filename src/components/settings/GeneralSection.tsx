@@ -19,6 +19,10 @@ type Props = {
   initialLoadedModel: string | null;
   recommendations: ModelRecommendation[];
   downloadedModels: DownloadedModelInfo[];
+  modelReady: boolean;
+  isDownloadingEmbedding: boolean;
+  embeddingDownloadStatus: string;
+  onDownloadEmbeddingModel: () => void;
   isLoadingLlm: boolean;
   switchingModelFilename: string | null;
   downloadStatus: string;
@@ -36,6 +40,10 @@ export function GeneralSection({
   initialLoadedModel,
   recommendations,
   downloadedModels,
+  modelReady,
+  isDownloadingEmbedding,
+  embeddingDownloadStatus,
+  onDownloadEmbeddingModel,
   isLoadingLlm,
   switchingModelFilename,
   downloadStatus,
@@ -53,6 +61,32 @@ export function GeneralSection({
 
   return (
     <div className="settings-section">
+      <h3>ベクトル検索モデル</h3>
+      <div className="loaded-model-info">
+        <span className="loaded-model-label">
+          multilingual-e5-small:{" "}
+          {modelReady
+            ? "ダウンロード済み"
+            : isDownloadingEmbedding
+              ? "ダウンロード中..."
+              : "未ダウンロード"}
+        </span>
+        {!modelReady && !isDownloadingEmbedding && (
+          <button
+            className="model-load-btn"
+            onClick={onDownloadEmbeddingModel}
+            title="Embeddingモデルをダウンロード"
+          >
+            &#8595;
+          </button>
+        )}
+      </div>
+      {isDownloadingEmbedding && embeddingDownloadStatus && (
+        <p className="progress-text">{embeddingDownloadStatus}</p>
+      )}
+
+      <hr className="settings-divider" />
+
       <h3>LLMモデル選択</h3>
       <div className="loaded-model-info">
         <span className="loaded-model-label">

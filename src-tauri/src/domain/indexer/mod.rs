@@ -13,6 +13,23 @@ pub struct IndexStatus {
     pub is_ready: bool,
 }
 
+/// フォルダスキャン結果（軽量スキャン用）
+#[derive(Debug, Clone, Serialize)]
+pub struct FolderScanResult {
+    /// 対象ファイル数（.txt + .md）
+    pub file_count: u64,
+    /// 対象ファイルの合計サイズ（バイト）
+    pub total_size_bytes: u64,
+    /// 最大ファイルサイズ（バイト）
+    pub max_file_size_bytes: u64,
+    /// 推定チャンク数（total_size / 400）
+    pub estimated_chunks: u64,
+    /// シンボリックリンクの有無
+    pub has_symlinks: bool,
+    /// スキャンがタイムアウトしたか
+    pub timed_out: bool,
+}
+
 /// インデックスに追加するドキュメントを表す
 #[derive(Debug, Clone)]
 pub struct Document {
@@ -45,4 +62,6 @@ pub enum IndexError {
     CommitError(String),
     #[error("IOエラー: {0}")]
     IoError(#[from] std::io::Error),
+    #[error("インデックス作成が中断された")]
+    Cancelled,
 }

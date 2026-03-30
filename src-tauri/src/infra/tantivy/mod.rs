@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use lindera::dictionary::load_dictionary;
 use lindera::mode::Mode;
@@ -128,6 +129,78 @@ impl TantivySearchEngine {
         writer
             .commit()
             .map_err(|e| IndexError::CommitError(e.to_string()))?;
+
+        Ok(count)
+    }
+
+    /// フォルダを走査してインデックスを構築する（キャンセル・進捗対応版）
+    pub fn index_folder_cancellable(
+        &mut self,
+        folder_path: &str,
+        cancel_token: &AtomicBool,
+        total_files: u64,
+        on_progress: impl Fn(u64, u64),
+    ) -> Result<u64, IndexError> {
+        let mut writer: IndexWriter<TantivyDocument> = self
+            .index
+            .writer(50_000_000)
+            .map_err(|e| IndexError::CreateError(e.to_string()))?;
+
+        // 既存のインデックスをクリア
+        writer
+            .delete_all_documents()
+            .map_err(|e| IndexError::CommitError(e.to_string()))?;
+
+        let mut count = 0u64;
+        let progress_interval = std::cmp::max(total_files as usize / 100, 1);
+
+        for entry in WalkDir::new(folder_path).into_iter().filter_map(|e| e.ok()) {
+            if cancel_token.load(Ordering::Relaxed) {
+                // commitしない → writerがdropされ未commitデータは破棄される
+                return Err(IndexError::Cancelled);
+            }
+
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if ext != "txt" && ext != "md" {
+                continue;
+            }
+
+            let body = match std::fs::read_to_string(path) {
+                Ok(content) => content,
+                Err(_) => continue,
+            };
+
+            let title = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+
+            let doc = Document {
+                path: path.to_string_lossy().to_string(),
+                title,
+                body,
+            };
+
+            Self::add_doc_to_writer(&mut writer, &self.schema, &doc)?;
+            count += 1;
+
+            if (count as usize).is_multiple_of(progress_interval) {
+                on_progress(count, total_files);
+            }
+        }
+
+        writer
+            .commit()
+            .map_err(|e| IndexError::CommitError(e.to_string()))?;
+
+        // 最終進捗を通知
+        on_progress(count, total_files);
 
         Ok(count)
     }
@@ -348,6 +421,28 @@ impl FulltextSearcher for TantivySearchEngine {
     }
 }
 
+/// 全文検索インデックスの破損を検査する
+///
+/// インデックスディレクトリが存在しない場合は正常（未作成）として true を返す。
+/// 存在する場合は open + reader 取得を試行し、失敗したら false を返す。
+pub fn validate_index(index_path: &Path) -> bool {
+    if !index_path.exists() {
+        return true;
+    }
+
+    let directory = match tantivy::directory::MmapDirectory::open(index_path) {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+
+    let index = match Index::open(directory) {
+        Ok(i) => i,
+        Err(_) => return false,
+    };
+
+    index.reader().is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -534,5 +629,35 @@ mod tests {
 
         let results = engine.search("Rust", 10).unwrap();
         assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_validate_index_nonexistent() {
+        assert!(validate_index(Path::new("/tmp/nonexistent-index-dir-xyz")));
+    }
+
+    #[test]
+    fn test_validate_index_valid() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let index_path = temp_dir.path().join("test-index");
+        let mut engine = TantivySearchEngine::new(index_path.to_str().unwrap()).unwrap();
+        let doc = Document {
+            path: "/test.md".to_string(),
+            title: "test.md".to_string(),
+            body: "テスト".to_string(),
+        };
+        engine.add_document(&doc).unwrap();
+
+        assert!(validate_index(&index_path));
+    }
+
+    #[test]
+    fn test_validate_index_corrupted() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let index_path = temp_dir.path().join("corrupted-index");
+        std::fs::create_dir_all(&index_path).unwrap();
+        std::fs::write(index_path.join("meta.json"), "invalid data").unwrap();
+
+        assert!(!validate_index(&index_path));
     }
 }

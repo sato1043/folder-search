@@ -22,11 +22,14 @@ type Props = {
   recommendations: ModelRecommendation[];
   downloadedModels: DownloadedModelInfo[];
   storageUsage: StorageUsage | null;
+  modelReady: boolean;
   isLoadingLlm: boolean;
   switchingModelFilename: string | null;
   isDownloading: boolean;
+  isDownloadingEmbedding: boolean;
   downloadStatus: string;
   onDownloadAndLoadLlm: (filename: string) => void;
+  onDownloadEmbeddingModel: () => void;
   onDownloadModel: (filename: string) => void;
   onDeleteModel: (filename: string) => void;
   onRegisterCustomModel: (model: LlmModelInfo) => void;
@@ -43,11 +46,14 @@ export function SettingsDialog({
   recommendations,
   downloadedModels,
   storageUsage,
+  modelReady,
   isLoadingLlm,
   switchingModelFilename,
   isDownloading,
+  isDownloadingEmbedding,
   downloadStatus,
   onDownloadAndLoadLlm,
+  onDownloadEmbeddingModel,
   onDownloadModel,
   onDeleteModel,
   onRegisterCustomModel,
@@ -145,6 +151,10 @@ export function SettingsDialog({
                 initialLoadedModel={initialLoadedModel}
                 recommendations={recommendations}
                 downloadedModels={downloadedModels}
+                modelReady={modelReady}
+                isDownloadingEmbedding={isDownloadingEmbedding}
+                embeddingDownloadStatus={isDownloadingEmbedding ? downloadStatus : ""}
+                onDownloadEmbeddingModel={onDownloadEmbeddingModel}
                 isLoadingLlm={isLoadingLlm}
                 switchingModelFilename={switchingModelFilename}
                 downloadStatus={isLoadingLlm ? downloadStatus : ""}
