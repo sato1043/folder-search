@@ -2,11 +2,13 @@ mod commands;
 pub mod domain;
 pub mod infra;
 
-use commands::AppState;
+use commands::{AppState, IndexValidation};
 use infra::config::SettingsStore;
 use infra::model;
 use infra::model_registry::ModelRegistry;
 use infra::onnx::OnnxEmbeddingGenerator;
+use infra::tantivy as tantivy_infra;
+use infra::vector_cache;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
@@ -44,6 +46,7 @@ pub fn run() {
             watcher: Mutex::new(None),
             loaded_llm_config: Mutex::new(None),
             cancel_token: Arc::new(AtomicBool::new(false)),
+            index_validation: Arc::new(IndexValidation::new()),
         })
         .setup(|app| {
             // TAURI_OPEN_DEVTOOLS=1 でDevToolsを自動で開く（デバッグビルドのみ）
@@ -56,6 +59,58 @@ pub fn run() {
 
             let state = app.state::<AppState>();
             let model_dir = &state.model_dir;
+
+            // バックグラウンドでインデックス検証を開始
+            if let Ok(app_data_dir) = app.path().app_data_dir() {
+                let validation = state.index_validation.clone();
+                std::thread::spawn(move || {
+                    // 全文検索インデックスの検証
+                    let fulltext_path = app_data_dir.join("index").join("fulltext");
+                    if !tantivy_infra::validate_index(&fulltext_path) {
+                        eprintln!(
+                            "BG検証: 全文検索インデックスの破損を検出、削除: {:?}",
+                            fulltext_path
+                        );
+                        let _ = std::fs::remove_dir_all(&fulltext_path);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+
+                    // ベクトルキャッシュの検証
+                    let cache = vector_cache::VectorCache::new(&app_data_dir);
+                    for cache_dir in cache.list_cache_dirs() {
+                        let hash = cache_dir
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("")
+                            .to_string();
+
+                        // フォルダ選択で予約済みならスキップ
+                        if validation.reserved.lock().unwrap().contains(&hash) {
+                            continue;
+                        }
+
+                        // 検証中ハッシュをセット
+                        *validation.current_hash.lock().unwrap() = Some(hash.clone());
+
+                        // 検証実行
+                        if !vector_cache::validate_cache_dir(&cache_dir) {
+                            eprintln!(
+                                "BG検証: ベクトルキャッシュの破損を検出、削除: {:?}",
+                                cache_dir
+                            );
+                            let _ = std::fs::remove_dir_all(&cache_dir);
+                        }
+
+                        // 検証中ハッシュをクリア・完了に追加・通知
+                        *validation.current_hash.lock().unwrap() = None;
+                        validation.completed.lock().unwrap().insert(hash);
+                        validation.notify.notify_all();
+
+                        // UIの動きを止めないように優先度を下げる
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                });
+            }
 
             if model::is_model_downloaded(model_dir) {
                 let files = model::model_files(model_dir);
@@ -102,6 +157,7 @@ pub fn run() {
             commands::clear_model_cache,
             commands::get_settings,
             commands::save_settings,
+            commands::validate_folder_indexes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

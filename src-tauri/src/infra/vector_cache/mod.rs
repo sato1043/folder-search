@@ -246,6 +246,20 @@ impl VectorCache {
         Ok(())
     }
 
+    /// base_dir内の全キャッシュディレクトリを列挙する
+    pub fn list_cache_dirs(&self) -> Vec<PathBuf> {
+        if !self.base_dir.exists() {
+            return Vec::new();
+        }
+        std::fs::read_dir(&self.base_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.path().is_dir())
+            .map(|e| e.path())
+            .collect()
+    }
+
     /// 指定ファイルのフィンガープリントを収集する
     pub fn collect_fingerprints_for(
         file_paths: &std::collections::HashSet<String>,
@@ -271,6 +285,39 @@ impl VectorCache {
         }
         fingerprints
     }
+}
+
+/// ベクトルキャッシュディレクトリの破損を検査する
+///
+/// manifest.jsonのパース・format_versionチェック・embeddings.binのデシリアライズを試行する。
+/// フォルダとの整合性チェックではなく、ファイル内容の健全性のみを検査する。
+pub fn validate_cache_dir(cache_dir: &Path) -> bool {
+    let manifest_path = cache_dir.join("manifest.json");
+    let embeddings_path = cache_dir.join("embeddings.bin");
+
+    if !manifest_path.exists() || !embeddings_path.exists() {
+        return false;
+    }
+
+    let manifest: CacheManifest = match std::fs::read_to_string(&manifest_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+    {
+        Some(m) => m,
+        None => return false,
+    };
+
+    if manifest.format_version != FORMAT_VERSION {
+        return false;
+    }
+
+    let data = match std::fs::read(&embeddings_path) {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+
+    let result: Result<CachedEmbeddings, _> = bincode::deserialize(&data);
+    result.is_ok()
 }
 
 #[cfg(test)]
@@ -464,5 +511,83 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cache = VectorCache::new(tmp.path());
         assert!(cache.compute_diff("/nonexistent/path").is_none());
+    }
+
+    #[test]
+    fn test_validate_cache_dir_valid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = VectorCache::new(tmp.path());
+
+        let folder_dir = tempfile::tempdir().unwrap();
+        let test_file = folder_dir.path().join("test.md");
+        std::fs::write(&test_file, "テスト").unwrap();
+
+        let folder_path = folder_dir.path().to_str().unwrap();
+        let metas = vec![ChunkMeta {
+            chunk_id: 0,
+            source_path: test_file.to_string_lossy().to_string(),
+            chunk_index: 0,
+            text: "テスト".to_string(),
+        }];
+        let embeddings = vec![vec![0.1f32; 384]];
+        cache.save(folder_path, &metas, &embeddings).unwrap();
+
+        let cache_dir = cache.cache_dir_for(folder_path);
+        assert!(validate_cache_dir(&cache_dir));
+    }
+
+    #[test]
+    fn test_validate_cache_dir_nonexistent() {
+        assert!(!validate_cache_dir(Path::new("/tmp/nonexistent-cache-xyz")));
+    }
+
+    #[test]
+    fn test_validate_cache_dir_corrupted_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_dir = tmp.path().join("corrupted");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        std::fs::write(cache_dir.join("manifest.json"), "invalid json").unwrap();
+        std::fs::write(cache_dir.join("embeddings.bin"), "invalid bin").unwrap();
+
+        assert!(!validate_cache_dir(&cache_dir));
+    }
+
+    #[test]
+    fn test_validate_cache_dir_corrupted_embeddings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_dir = tmp.path().join("corrupted");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+
+        let manifest = CacheManifest {
+            format_version: FORMAT_VERSION,
+            folder_path: "/test".to_string(),
+            file_fingerprints: HashMap::new(),
+            chunk_count: 0,
+            embedding_dimension: 384,
+        };
+        let json = serde_json::to_string(&manifest).unwrap();
+        std::fs::write(cache_dir.join("manifest.json"), json).unwrap();
+        std::fs::write(cache_dir.join("embeddings.bin"), "invalid bin data").unwrap();
+
+        assert!(!validate_cache_dir(&cache_dir));
+    }
+
+    #[test]
+    fn test_list_cache_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = VectorCache::new(tmp.path());
+
+        // base_dirが存在しない場合は空
+        assert!(cache.list_cache_dirs().is_empty());
+
+        // ディレクトリを作成
+        let base = tmp.path().join("index").join("vector");
+        std::fs::create_dir_all(base.join("abc123")).unwrap();
+        std::fs::create_dir_all(base.join("def456")).unwrap();
+        // ファイルはリストに含まれない
+        std::fs::write(base.join("not-a-dir.txt"), "x").unwrap();
+
+        let dirs = cache.list_cache_dirs();
+        assert_eq!(dirs.len(), 2);
     }
 }

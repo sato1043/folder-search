@@ -35,6 +35,7 @@ import {
   getStorageUsage,
   registerCustomModel,
   unregisterCustomModel,
+  validateFolderIndexes,
 } from "./lib/tauri";
 import type {
   SearchResult,
@@ -358,6 +359,12 @@ function App() {
     try {
       const selected = await open({ directory: true, multiple: false });
       if (!selected) return;
+
+      // インデックスの破損検査（バックグラウンド検証との競合制御込み）
+      const validation = await validateFolderIndexes(selected as string);
+      if (validation.fulltext_removed || validation.vector_cache_removed) {
+        console.warn("破損インデックスを削除:", validation);
+      }
 
       const scan = await scanFolder(selected as string);
 

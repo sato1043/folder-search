@@ -63,6 +63,26 @@ cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 rm -f src-tauri/target/debug/models/model.onnx src-tauri/target/debug/models/tokenizer.json
 ```
 
+## データ保存場所
+
+### モデルディレクトリ（models/）
+
+実行バイナリの隣の `models/` ディレクトリ。開発時は `src-tauri/target/debug/models/`。
+
+### アプリデータディレクトリ（appDataDir）
+
+Tauri の `appDataDir` に対応する。identifier は `com.foldersearch.desktop`。
+
+| OS | パス |
+|----|------|
+| Linux | `~/.local/share/com.foldersearch.desktop/` |
+| Windows | `%APPDATA%/com.foldersearch.desktop/` |
+| macOS | `~/Library/Application Support/com.foldersearch.desktop/` |
+
+主な内容:
+- `index/fulltext/` — tantivy 全文検索インデックス
+- `index/vector/{hash}/` — ベクトルキャッシュ（manifest.json + embeddings.bin）
+
 ## 開発ルール
 
 ### 全般

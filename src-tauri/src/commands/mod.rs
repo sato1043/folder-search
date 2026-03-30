@@ -1,6 +1,7 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use tauri::{Emitter, State};
 
@@ -20,8 +21,8 @@ use crate::infra::llama::LlamaEngine;
 use crate::infra::model;
 use crate::infra::model_registry::ModelRegistry;
 use crate::infra::onnx::OnnxEmbeddingGenerator;
-use crate::infra::tantivy::TantivySearchEngine;
-use crate::infra::vector_cache::VectorCache;
+use crate::infra::tantivy::{self as tantivy_infra, TantivySearchEngine};
+use crate::infra::vector_cache::{self, VectorCache};
 use crate::infra::watcher::FileWatcher;
 
 use tauri::Manager;
@@ -31,6 +32,29 @@ pub struct LoadedLlmConfig {
     pub filename: String,
     pub chat_template: ChatTemplate,
     pub context_length: u32,
+}
+
+/// インデックス検証の共有状態
+pub struct IndexValidation {
+    /// バックグラウンド検証が処理中のキャッシュハッシュ
+    pub(crate) current_hash: Mutex<Option<String>>,
+    /// フォルダ選択で予約済み（バックグラウンドがスキップすべきハッシュ）
+    pub(crate) reserved: Mutex<HashSet<String>>,
+    /// バックグラウンドで検証完了済みのハッシュ
+    pub(crate) completed: Mutex<HashSet<String>>,
+    /// バックグラウンド検証の完了通知
+    pub(crate) notify: Condvar,
+}
+
+impl IndexValidation {
+    pub fn new() -> Self {
+        Self {
+            current_hash: Mutex::new(None),
+            reserved: Mutex::new(HashSet::new()),
+            completed: Mutex::new(HashSet::new()),
+            notify: Condvar::new(),
+        }
+    }
 }
 
 /// アプリの状態
@@ -46,6 +70,7 @@ pub struct AppState {
     pub model_registry: ModelRegistry,
     pub settings_store: SettingsStore,
     pub cancel_token: Arc<AtomicBool>,
+    pub index_validation: Arc<IndexValidation>,
 }
 
 /// フォルダの軽量スキャンを実行する（メタデータのみ取得）
@@ -1111,4 +1136,104 @@ pub fn clear_model_cache(state: State<'_, AppState>) -> Result<Vec<String>, Stri
         loaded_llm.as_deref(),
         embedding_loaded,
     ))
+}
+
+/// インデックス検証結果
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct IndexValidationResult {
+    pub fulltext_removed: bool,
+    pub vector_cache_removed: bool,
+}
+
+/// 選択フォルダのインデックスを検証する（フォルダ選択時に同期呼出）
+///
+/// バックグラウンド検証との競合を制御する。
+/// - バックグラウンドがこのフォルダを検証中なら完了を待つ
+/// - バックグラウンドが未到達ならスキップリストに入れて自分で検証
+/// - バックグラウンドが検証済みなら再検証をスキップ
+#[tauri::command]
+pub fn validate_folder_indexes(
+    app: tauri::AppHandle,
+    folder_path: String,
+    state: State<'_, AppState>,
+) -> Result<IndexValidationResult, String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let fulltext_path = app_data_dir.join("index").join("fulltext");
+    let cache = VectorCache::new(&app_data_dir);
+    let cache_dir = cache.cache_dir_for(&folder_path);
+    let hash = cache_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+
+    let validation = &state.index_validation;
+
+    // バックグラウンド検証との競合制御
+    {
+        // reserved に追加（BGがまだ到達していなければスキップさせる）
+        let mut reserved = validation.reserved.lock().map_err(|e| e.to_string())?;
+        reserved.insert(hash.clone());
+    }
+
+    // BGが検証済みかチェック
+    let already_validated = {
+        let completed = validation.completed.lock().map_err(|e| e.to_string())?;
+        completed.contains(&hash)
+    };
+
+    if !already_validated {
+        // BGがこのフォルダを検証中なら完了を待つ
+        {
+            let mut current = validation.current_hash.lock().map_err(|e| e.to_string())?;
+            while current.as_deref() == Some(&hash) {
+                current = validation
+                    .notify
+                    .wait(current)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+
+        // BGが検証完了したか再チェック
+        let validated_by_bg = {
+            let completed = validation.completed.lock().map_err(|e| e.to_string())?;
+            completed.contains(&hash)
+        };
+
+        if validated_by_bg {
+            // BGが検証完了 → 破損していたらBGが既に削除済み
+            return Ok(IndexValidationResult {
+                fulltext_removed: false,
+                vector_cache_removed: false,
+            });
+        }
+    } else {
+        return Ok(IndexValidationResult {
+            fulltext_removed: false,
+            vector_cache_removed: false,
+        });
+    }
+
+    // 自分で検証する
+    let mut fulltext_removed = false;
+    let mut vector_cache_removed = false;
+
+    // 全文検索インデックスの検証
+    if !tantivy_infra::validate_index(&fulltext_path) {
+        eprintln!("全文検索インデックスの破損を検出、削除: {:?}", fulltext_path);
+        let _ = std::fs::remove_dir_all(&fulltext_path);
+        fulltext_removed = true;
+    }
+
+    // ベクトルキャッシュの検証
+    if cache_dir.exists() && !vector_cache::validate_cache_dir(&cache_dir) {
+        eprintln!("ベクトルキャッシュの破損を検出、削除: {:?}", cache_dir);
+        let _ = std::fs::remove_dir_all(&cache_dir);
+        vector_cache_removed = true;
+    }
+
+    Ok(IndexValidationResult {
+        fulltext_removed,
+        vector_cache_removed,
+    })
 }

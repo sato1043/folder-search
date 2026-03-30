@@ -421,6 +421,28 @@ impl FulltextSearcher for TantivySearchEngine {
     }
 }
 
+/// 全文検索インデックスの破損を検査する
+///
+/// インデックスディレクトリが存在しない場合は正常（未作成）として true を返す。
+/// 存在する場合は open + reader 取得を試行し、失敗したら false を返す。
+pub fn validate_index(index_path: &Path) -> bool {
+    if !index_path.exists() {
+        return true;
+    }
+
+    let directory = match tantivy::directory::MmapDirectory::open(index_path) {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+
+    let index = match Index::open(directory) {
+        Ok(i) => i,
+        Err(_) => return false,
+    };
+
+    index.reader().is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -607,5 +629,35 @@ mod tests {
 
         let results = engine.search("Rust", 10).unwrap();
         assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_validate_index_nonexistent() {
+        assert!(validate_index(Path::new("/tmp/nonexistent-index-dir-xyz")));
+    }
+
+    #[test]
+    fn test_validate_index_valid() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let index_path = temp_dir.path().join("test-index");
+        let mut engine = TantivySearchEngine::new(index_path.to_str().unwrap()).unwrap();
+        let doc = Document {
+            path: "/test.md".to_string(),
+            title: "test.md".to_string(),
+            body: "テスト".to_string(),
+        };
+        engine.add_document(&doc).unwrap();
+
+        assert!(validate_index(&index_path));
+    }
+
+    #[test]
+    fn test_validate_index_corrupted() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let index_path = temp_dir.path().join("corrupted-index");
+        std::fs::create_dir_all(&index_path).unwrap();
+        std::fs::write(index_path.join("meta.json"), "invalid data").unwrap();
+
+        assert!(!validate_index(&index_path));
     }
 }

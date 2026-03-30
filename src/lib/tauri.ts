@@ -133,3 +133,12 @@ export async function registerCustomModel(model: LlmModelInfo): Promise<void> {
 export async function unregisterCustomModel(filename: string): Promise<void> {
   return invoke<void>("unregister_custom_model", { filename });
 }
+
+export type IndexValidationResult = {
+  fulltext_removed: boolean;
+  vector_cache_removed: boolean;
+};
+
+export async function validateFolderIndexes(folderPath: string): Promise<IndexValidationResult> {
+  return invoke<IndexValidationResult>("validate_folder_indexes", { folderPath });
+}
