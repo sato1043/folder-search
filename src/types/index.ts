@@ -36,6 +36,30 @@ export type VectorIndexProgress = {
   total: number;
 };
 
+/** 全文検索インデックス構築進捗 */
+export type FulltextIndexProgress = {
+  current: number;
+  total: number;
+};
+
+/** フォルダスキャン結果 */
+export type FolderScanResult = {
+  file_count: number;
+  total_size_bytes: number;
+  max_file_size_bytes: number;
+  estimated_chunks: number;
+  has_symlinks: boolean;
+  timed_out: boolean;
+};
+
+/** インデックス作成ダイアログの状態 */
+export type IndexingPhase =
+  | { kind: "confirm"; scanResult: FolderScanResult }
+  | { kind: "fulltext"; current: number; total: number }
+  | { kind: "vector"; current: number; total: number }
+  | { kind: "done"; fulltextCount: number; vectorChunks: number }
+  | { kind: "cancelled"; fulltextCount: number; vectorChunks?: number };
+
 /** 検索モード */
 export type SearchMode = "fulltext" | "hybrid";
 

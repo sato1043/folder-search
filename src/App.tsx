@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { appDataDir } from "@tauri-apps/api/path";
 import { listen } from "@tauri-apps/api/event";
@@ -9,7 +9,10 @@ import { ResultList } from "./components/search/ResultList";
 import { Preview } from "./components/search/Preview";
 import { ChatMessage } from "./components/chat/ChatMessage";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
+import { IndexingDialog } from "./components/indexing/IndexingDialog";
 import {
+  scanFolder,
+  cancelIndexing,
   buildIndex,
   search,
   hybridSearch,
@@ -37,7 +40,9 @@ import type {
   SearchResult,
   DownloadProgress,
   VectorIndexProgress,
+  FulltextIndexProgress,
   SearchMode,
+  IndexingPhase,
   LlmModelInfo,
   SystemInfo,
   ModelRecommendation,
@@ -83,6 +88,10 @@ function App() {
 
   // 設定ダイアログ
   const [showSettings, setShowSettings] = useState(false);
+
+  // インデックス作成ダイアログ
+  const [indexingPhase, setIndexingPhase] = useState<IndexingPhase | null>(null);
+  const pendingFolderRef = useRef<string | null>(null);
 
   // 初期化
   useEffect(() => {
@@ -158,12 +167,34 @@ function App() {
     };
   }, []);
 
+  // 全文検索インデックス構築進捗のリスナー
+  useEffect(() => {
+    const unlisten = listen<FulltextIndexProgress>("fulltext-index-progress", (event) => {
+      const p = event.payload;
+      setIndexingPhase((prev) => {
+        if (prev && (prev.kind === "fulltext" || prev.kind === "confirm")) {
+          return { kind: "fulltext", current: p.current, total: p.total };
+        }
+        return prev;
+      });
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
+
   // ベクトルインデックス構築進捗のリスナー
   useEffect(() => {
     const unlisten = listen<VectorIndexProgress>("vector-index-progress", (event) => {
       const p = event.payload;
       const pct = p.total > 0 ? Math.round((p.current / p.total) * 100) : 0;
       setVectorProgress(`${pct}%`);
+      setIndexingPhase((prev) => {
+        if (prev && (prev.kind === "vector" || prev.kind === "fulltext")) {
+          return { kind: "vector", current: p.current, total: p.total };
+        }
+        return prev;
+      });
     });
     return () => {
       unlisten.then((f) => f());
@@ -224,28 +255,137 @@ function App() {
     }
   }, []);
 
-  const handleSelectFolder = useCallback(async () => {
-    try {
-      const selected = await open({ directory: true, multiple: false });
-      if (selected) {
-        setFolderPath(selected as string);
+  /** 確認ダイアログが必要か判定する */
+  const needsConfirmation = useCallback(
+    (scan: {
+      file_count: number;
+      total_size_bytes: number;
+      estimated_chunks: number;
+      max_file_size_bytes: number;
+      timed_out: boolean;
+    }) => {
+      return (
+        scan.file_count >= 500 ||
+        scan.total_size_bytes >= 100 * 1024 * 1024 ||
+        scan.estimated_chunks >= 40000 ||
+        scan.max_file_size_bytes >= 10 * 1024 * 1024 ||
+        scan.timed_out
+      );
+    },
+    [],
+  );
+
+  /** インデックス構築を実行する（確認ダイアログ経由 or 直接） */
+  const executeIndexBuild = useCallback(
+    async (selected: string, fileCount: number) => {
+      try {
+        setFolderPath(selected);
         setIsIndexing(true);
         setError(null);
 
+        if (indexingPhase) {
+          setIndexingPhase({ kind: "fulltext", current: 0, total: fileCount });
+        }
+
         const indexPath = (await appDataDir()) + "/index/fulltext";
-        const count = await buildIndex(selected as string, indexPath);
+        const count = await buildIndex(selected, indexPath, fileCount);
         setIndexCount(count);
         setIsIndexing(false);
 
         if (modelReady && count > 0) {
-          await triggerBuildVectorIndex();
+          if (indexingPhase) {
+            setIndexingPhase({ kind: "vector", current: 0, total: 0 });
+          }
+          setIsBuildingVector(true);
+          setVectorProgress("");
+          await new Promise((r) => requestAnimationFrame(r));
+          const chunkCount = await buildVectorIndex();
+          setVectorChunkCount(chunkCount);
+          setIsBuildingVector(false);
+          setVectorProgress("");
+
+          if (indexingPhase) {
+            setIndexingPhase({ kind: "done", fulltextCount: count, vectorChunks: chunkCount });
+          }
+        } else {
+          if (indexingPhase) {
+            setIndexingPhase({ kind: "done", fulltextCount: count, vectorChunks: 0 });
+          }
         }
+      } catch (e) {
+        const msg = String(e);
+        if (msg.includes("中断")) {
+          // 中断された場合
+          setIsIndexing(false);
+          setIsBuildingVector(false);
+          setVectorProgress("");
+          setIndexingPhase({
+            kind: "cancelled",
+            fulltextCount: indexCount,
+            vectorChunks: undefined,
+          });
+        } else {
+          setError(msg);
+          setIsIndexing(false);
+          setIsBuildingVector(false);
+          setIndexingPhase(null);
+        }
+      }
+    },
+    [modelReady, indexingPhase, indexCount],
+  );
+
+  const handleSelectFolder = useCallback(async () => {
+    try {
+      const selected = await open({ directory: true, multiple: false });
+      if (!selected) return;
+
+      const scan = await scanFolder(selected as string);
+
+      if (scan.file_count === 0) {
+        setError("対象ファイル（.txt / .md）が見つからない");
+        return;
+      }
+
+      if (needsConfirmation(scan)) {
+        // 確認ダイアログを表示
+        pendingFolderRef.current = selected as string;
+        setIndexingPhase({ kind: "confirm", scanResult: scan });
+      } else {
+        // 閾値未満 → 即座に実行
+        await executeIndexBuild(selected as string, scan.file_count);
       }
     } catch (e) {
       setError(String(e));
       setIsIndexing(false);
     }
-  }, [modelReady, triggerBuildVectorIndex]);
+  }, [needsConfirmation, executeIndexBuild]);
+
+  /** ダイアログの[開始]ボタン */
+  const handleIndexingStart = useCallback(async () => {
+    const folder = pendingFolderRef.current;
+    if (!folder || !indexingPhase || indexingPhase.kind !== "confirm") return;
+    const fileCount = indexingPhase.scanResult.file_count;
+    await executeIndexBuild(folder, fileCount);
+  }, [indexingPhase, executeIndexBuild]);
+
+  /** ダイアログの[中断]ボタン */
+  const handleIndexingCancel = useCallback(async () => {
+    if (indexingPhase?.kind === "confirm") {
+      // 確認画面でのキャンセル → ダイアログを閉じるだけ
+      setIndexingPhase(null);
+      pendingFolderRef.current = null;
+      return;
+    }
+    // 実行中の中断
+    await cancelIndexing();
+  }, [indexingPhase]);
+
+  /** ダイアログの[OK]/クローズ */
+  const handleIndexingClose = useCallback(() => {
+    setIndexingPhase(null);
+    pendingFolderRef.current = null;
+  }, []);
 
   const handleDownloadEmbeddingModel = useCallback(async () => {
     try {
@@ -403,6 +543,14 @@ function App() {
 
   return (
     <div className="app">
+      {indexingPhase && (
+        <IndexingDialog
+          phase={indexingPhase}
+          onStart={handleIndexingStart}
+          onCancel={handleIndexingCancel}
+          onClose={handleIndexingClose}
+        />
+      )}
       <SettingsDialog
         isOpen={showSettings}
         diskFreeBytes={storageUsage?.disk_free_bytes ?? 0}

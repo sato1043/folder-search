@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { SearchResult, HybridSearchResult, IndexStatus } from "../types";
+import type { SearchResult, HybridSearchResult, IndexStatus, FolderScanResult } from "../types";
 import type {
   AppSettings,
   LlmModelInfo,
@@ -11,8 +11,20 @@ import type {
   StorageUsage,
 } from "../types";
 
-export async function buildIndex(folderPath: string, indexPath: string): Promise<number> {
-  return invoke<number>("build_index", { folderPath, indexPath });
+export async function scanFolder(folderPath: string): Promise<FolderScanResult> {
+  return invoke<FolderScanResult>("scan_folder", { folderPath });
+}
+
+export async function cancelIndexing(): Promise<void> {
+  return invoke<void>("cancel_indexing");
+}
+
+export async function buildIndex(
+  folderPath: string,
+  indexPath: string,
+  totalFiles: number,
+): Promise<number> {
+  return invoke<number>("build_index", { folderPath, indexPath, totalFiles });
 }
 
 export async function search(query: string, limit: number = 20): Promise<SearchResult[]> {

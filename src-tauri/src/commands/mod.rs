@@ -1,5 +1,6 @@
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use tauri::{Emitter, State};
 
@@ -44,6 +45,79 @@ pub struct AppState {
     pub loaded_llm_config: Mutex<Option<LoadedLlmConfig>>,
     pub model_registry: ModelRegistry,
     pub settings_store: SettingsStore,
+    pub cancel_token: Arc<AtomicBool>,
+}
+
+/// フォルダの軽量スキャンを実行する（メタデータのみ取得）
+#[tauri::command]
+pub fn scan_folder(
+    folder_path: String,
+) -> Result<crate::domain::indexer::FolderScanResult, String> {
+    use crate::domain::indexer::FolderScanResult;
+    use std::time::{Duration, Instant};
+
+    let timeout = Duration::from_secs(5);
+    let start = Instant::now();
+
+    let mut file_count = 0u64;
+    let mut total_size_bytes = 0u64;
+    let mut max_file_size_bytes = 0u64;
+    let mut has_symlinks = false;
+    let mut timed_out = false;
+
+    for entry in walkdir::WalkDir::new(&folder_path)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        if start.elapsed() > timeout {
+            timed_out = true;
+            break;
+        }
+
+        if entry.path_is_symlink() {
+            has_symlinks = true;
+        }
+
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if ext != "txt" && ext != "md" {
+            continue;
+        }
+
+        if let Ok(metadata) = std::fs::metadata(path) {
+            let size = metadata.len();
+            file_count += 1;
+            total_size_bytes += size;
+            if size > max_file_size_bytes {
+                max_file_size_bytes = size;
+            }
+        }
+    }
+
+    let estimated_chunks = if total_size_bytes > 0 {
+        total_size_bytes / 400
+    } else {
+        0
+    };
+
+    Ok(FolderScanResult {
+        file_count,
+        total_size_bytes,
+        max_file_size_bytes,
+        estimated_chunks,
+        has_symlinks,
+        timed_out,
+    })
+}
+
+/// インデックス作成を中断する
+#[tauri::command]
+pub fn cancel_indexing(state: State<'_, AppState>) {
+    state.cancel_token.store(true, Ordering::Relaxed);
 }
 
 /// 全文検索インデックスを構築する
@@ -52,8 +126,12 @@ pub fn build_index(
     app: tauri::AppHandle,
     folder_path: String,
     index_path: String,
+    total_files: u64,
     state: State<'_, AppState>,
 ) -> Result<u64, String> {
+    // キャンセルトークンをリセット
+    state.cancel_token.store(false, Ordering::Relaxed);
+
     // 既存のウォッチャーを停止
     {
         let mut watcher_guard = state.watcher.lock().map_err(|e| e.to_string())?;
@@ -63,9 +141,27 @@ pub fn build_index(
     let mut engine = TantivySearchEngine::new(&index_path)
         .map_err(|e| format!("インデックス作成失敗: {}", e))?;
 
-    let count = engine
-        .index_folder(&folder_path)
-        .map_err(|e| format!("インデックス構築失敗: {}", e))?;
+    let cancel_token = &state.cancel_token;
+    let app_ref = &app;
+    let count = match engine.index_folder_cancellable(
+        &folder_path,
+        cancel_token,
+        total_files,
+        |current, total| {
+            let _ = app_ref.emit(
+                "fulltext-index-progress",
+                serde_json::json!({ "current": current, "total": total }),
+            );
+        },
+    ) {
+        Ok(count) => count,
+        Err(crate::domain::indexer::IndexError::Cancelled) => {
+            // 中断 → インデックスディレクトリ削除
+            let _ = std::fs::remove_dir_all(&index_path);
+            return Err("インデックス作成が中断された".to_string());
+        }
+        Err(e) => return Err(format!("インデックス構築失敗: {}", e)),
+    };
 
     {
         let mut guard = state.engine.lock().map_err(|e| e.to_string())?;
@@ -120,6 +216,7 @@ pub fn build_index(
                 &diff,
                 cached,
                 generator,
+                None, // ファイル監視の差分更新ではキャンセル不要
             ) {
                 Ok((vector_index, total)) => {
                     if let Ok(mut guard) = state.vector_index.lock() {
@@ -295,6 +392,7 @@ fn build_vector_index_incremental_inner(
     diff: &crate::infra::vector_cache::CacheDiff,
     cached: crate::infra::vector_cache::CachedEmbeddings,
     generator: &mut OnnxEmbeddingGenerator,
+    cancel_token: Option<&AtomicBool>,
 ) -> Result<(HnswVectorIndex, u64), String> {
     use crate::domain::embedding::EmbeddingGenerator;
     use std::collections::HashSet;
@@ -317,6 +415,10 @@ fn build_vector_index_incremental_inner(
         }
     }
 
+    // 未変更ファイルのパスを収集（途中保存用）
+    let mut processed_files: HashSet<String> =
+        all_metas.iter().map(|m| m.source_path.clone()).collect();
+
     // 追加・変更ファイルのチャンク分割 + embedding生成
     let target_files: Vec<&str> = diff
         .added
@@ -335,7 +437,31 @@ fn build_vector_index_incremental_inner(
         new_chunks.extend(chunks);
     }
 
+    let mut current_file = String::new();
+
     for chunk in new_chunks.iter() {
+        if let Some(token) = cancel_token {
+            if token.load(Ordering::Relaxed) {
+                // 途中保存
+                save_partial_vector_cache(
+                    cache,
+                    folder_path,
+                    &all_metas,
+                    &all_embeddings,
+                    &processed_files,
+                );
+                return Err("ベクトルインデックス構築が中断された".to_string());
+            }
+        }
+
+        // ファイル境界の検出
+        if chunk.source_path != current_file {
+            if !current_file.is_empty() {
+                processed_files.insert(current_file.clone());
+            }
+            current_file = chunk.source_path.clone();
+        }
+
         let text_with_prefix = format!("passage: {}", chunk.text);
         let embedding = generator
             .generate(&text_with_prefix)
@@ -348,6 +474,11 @@ fn build_vector_index_incremental_inner(
             text: chunk.text.clone(),
         });
         all_embeddings.push(embedding);
+    }
+
+    // 最後のファイルを処理済みに追加
+    if !current_file.is_empty() {
+        processed_files.insert(current_file);
     }
 
     // chunk_idを振り直す
@@ -372,7 +503,7 @@ fn build_vector_index_incremental_inner(
     Ok((vector_index, total))
 }
 
-/// 差分更新でベクトルインデックスを構築する（コマンド用ラッパー）
+/// 差分更新でベクトルインデックスを構築する��コマンド用ラッパー）
 fn build_vector_index_incremental(
     app: &tauri::AppHandle,
     cache: &VectorCache,
@@ -382,8 +513,15 @@ fn build_vector_index_incremental(
     generator: &mut OnnxEmbeddingGenerator,
     state: &State<'_, AppState>,
 ) -> Result<u64, String> {
-    let (vector_index, total) =
-        build_vector_index_incremental_inner(cache, folder_path, diff, cached, generator)?;
+    let cancel_token = &state.cancel_token;
+    let (vector_index, total) = build_vector_index_incremental_inner(
+        cache,
+        folder_path,
+        diff,
+        cached,
+        generator,
+        Some(cancel_token),
+    )?;
 
     let _ = app.emit(
         "vector-index-progress",
@@ -405,6 +543,9 @@ fn build_vector_index_full(
     state: &State<'_, AppState>,
 ) -> Result<u64, String> {
     use crate::domain::embedding::EmbeddingGenerator;
+    use std::collections::HashSet;
+
+    let cancel_token = &state.cancel_token;
 
     // ファイル走査・チャンク分割
     let mut all_chunks = Vec::new();
@@ -412,6 +553,10 @@ fn build_vector_index_full(
         .into_iter()
         .filter_map(|e| e.ok())
     {
+        if cancel_token.load(Ordering::Relaxed) {
+            return Err("ベクトルインデックス構築が中断された".to_string());
+        }
+
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -430,17 +575,48 @@ fn build_vector_index_full(
 
     let total = all_chunks.len() as u64;
 
-    let mut vector_index = HnswVectorIndex::new();
+    let mut all_metas: Vec<crate::infra::hnsw::ChunkMeta> = Vec::with_capacity(all_chunks.len());
     let mut all_embeddings: Vec<Vec<f32>> = Vec::with_capacity(all_chunks.len());
+
+    // 処理済みファイルの追跡（途中保存用）
+    let mut processed_files: HashSet<String> = HashSet::new();
+    let mut current_file = String::new();
 
     let progress_interval = std::cmp::max(total as usize / 100, 1);
 
     for (i, chunk) in all_chunks.iter().enumerate() {
+        if cancel_token.load(Ordering::Relaxed) {
+            // current_fileは未完了なので processed_files に含めない
+            // 処理済みファイル分のembeddingをキャッシュに途中保存する
+            save_partial_vector_cache(
+                cache,
+                folder_path,
+                &all_metas,
+                &all_embeddings,
+                &processed_files,
+            );
+            return Err("ベクトルインデックス構築が中断された".to_string());
+        }
+
+        // ファイル境界の検出
+        if chunk.source_path != current_file {
+            if !current_file.is_empty() {
+                processed_files.insert(current_file.clone());
+            }
+            current_file = chunk.source_path.clone();
+        }
+
         let text_with_prefix = format!("passage: {}", chunk.text);
         let embedding = generator
             .generate(&text_with_prefix)
             .map_err(|e| format!("embedding生成失敗: {}", e))?;
-        vector_index.add(chunk, &embedding);
+
+        all_metas.push(crate::infra::hnsw::ChunkMeta {
+            chunk_id: i,
+            source_path: chunk.source_path.clone(),
+            chunk_index: chunk.chunk_index,
+            text: chunk.text.clone(),
+        });
         all_embeddings.push(embedding);
 
         if i % progress_interval == 0 {
@@ -454,6 +630,18 @@ fn build_vector_index_full(
         }
     }
 
+    // 最後のファイルを処理済みに追加
+    if !current_file.is_empty() {
+        processed_files.insert(current_file);
+    }
+
+    // HNSWインデックスを構築
+    let cached = crate::infra::vector_cache::CachedEmbeddings {
+        metas: all_metas,
+        embeddings: all_embeddings.clone(),
+    };
+    let vector_index = HnswVectorIndex::from_cache(cached);
+
     if let Err(e) = cache.save(folder_path, vector_index.metas(), &all_embeddings) {
         eprintln!("ベクトルキャッシュ保存失敗（無視）: {}", e);
     }
@@ -462,6 +650,44 @@ fn build_vector_index_full(
     *guard = Some(vector_index);
 
     Ok(total)
+}
+
+/// ベクトルembeddingの途中保存を行う
+fn save_partial_vector_cache(
+    cache: &VectorCache,
+    folder_path: &str,
+    metas: &[crate::infra::hnsw::ChunkMeta],
+    embeddings: &[Vec<f32>],
+    processed_files: &std::collections::HashSet<String>,
+) {
+    if processed_files.is_empty() {
+        return;
+    }
+
+    // 処理済みファイルに属するチャンクのみを抽出
+    let mut partial_metas = Vec::new();
+    let mut partial_embeddings = Vec::new();
+    for (meta, emb) in metas.iter().zip(embeddings.iter()) {
+        if processed_files.contains(&meta.source_path) {
+            partial_metas.push(crate::infra::hnsw::ChunkMeta {
+                chunk_id: partial_metas.len(),
+                source_path: meta.source_path.clone(),
+                chunk_index: meta.chunk_index,
+                text: meta.text.clone(),
+            });
+            partial_embeddings.push(emb.clone());
+        }
+    }
+
+    let fingerprints = VectorCache::collect_fingerprints_for(processed_files);
+    if let Err(e) = cache.save_with_fingerprints(
+        folder_path,
+        &partial_metas,
+        &partial_embeddings,
+        fingerprints,
+    ) {
+        eprintln!("ベクトルキャッシュ途中保存失敗（無視）: {}", e);
+    }
 }
 
 /// ハイブリッド検索を実行する

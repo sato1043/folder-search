@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use lindera::dictionary::load_dictionary;
 use lindera::mode::Mode;
@@ -128,6 +129,78 @@ impl TantivySearchEngine {
         writer
             .commit()
             .map_err(|e| IndexError::CommitError(e.to_string()))?;
+
+        Ok(count)
+    }
+
+    /// フォルダを走査してインデックスを構築する（キャンセル・進捗対応版）
+    pub fn index_folder_cancellable(
+        &mut self,
+        folder_path: &str,
+        cancel_token: &AtomicBool,
+        total_files: u64,
+        on_progress: impl Fn(u64, u64),
+    ) -> Result<u64, IndexError> {
+        let mut writer: IndexWriter<TantivyDocument> = self
+            .index
+            .writer(50_000_000)
+            .map_err(|e| IndexError::CreateError(e.to_string()))?;
+
+        // 既存のインデックスをクリア
+        writer
+            .delete_all_documents()
+            .map_err(|e| IndexError::CommitError(e.to_string()))?;
+
+        let mut count = 0u64;
+        let progress_interval = std::cmp::max(total_files as usize / 100, 1);
+
+        for entry in WalkDir::new(folder_path).into_iter().filter_map(|e| e.ok()) {
+            if cancel_token.load(Ordering::Relaxed) {
+                // commitしない → writerがdropされ未commitデータは破棄される
+                return Err(IndexError::Cancelled);
+            }
+
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if ext != "txt" && ext != "md" {
+                continue;
+            }
+
+            let body = match std::fs::read_to_string(path) {
+                Ok(content) => content,
+                Err(_) => continue,
+            };
+
+            let title = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+
+            let doc = Document {
+                path: path.to_string_lossy().to_string(),
+                title,
+                body,
+            };
+
+            Self::add_doc_to_writer(&mut writer, &self.schema, &doc)?;
+            count += 1;
+
+            if (count as usize).is_multiple_of(progress_interval) {
+                on_progress(count, total_files);
+            }
+        }
+
+        writer
+            .commit()
+            .map_err(|e| IndexError::CommitError(e.to_string()))?;
+
+        // 最終進捗を通知
+        on_progress(count, total_files);
 
         Ok(count)
     }

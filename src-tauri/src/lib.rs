@@ -7,7 +7,8 @@ use infra::config::SettingsStore;
 use infra::model;
 use infra::model_registry::ModelRegistry;
 use infra::onnx::OnnxEmbeddingGenerator;
-use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -42,6 +43,7 @@ pub fn run() {
             folder_path: Mutex::new(None),
             watcher: Mutex::new(None),
             loaded_llm_config: Mutex::new(None),
+            cancel_token: Arc::new(AtomicBool::new(false)),
         })
         .setup(|app| {
             // TAURI_OPEN_DEVTOOLS=1 でDevToolsを自動で開く（デバッグビルドのみ）
@@ -74,6 +76,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::scan_folder,
+            commands::cancel_indexing,
             commands::build_index,
             commands::search,
             commands::get_index_status,

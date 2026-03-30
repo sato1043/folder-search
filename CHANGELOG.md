@@ -5,6 +5,22 @@
 フォーマットは [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に準拠する。
 バージョニングは [Semantic Versioning](https://semver.org/lang/ja/) に従う。
 
+## [Unreleased]
+
+### Added
+
+- フォルダ選択時のインデックス作成確認ダイアログ（ファイル数>=500等の閾値判定で自動表示）
+- 軽量フォルダスキャン（`scan_folder` コマンド、メタデータのみ取得、5秒タイムアウト）
+- 全文検索インデックス構築の進捗表示（`fulltext-index-progress` イベント）
+- インデックス作成の中断機能（`cancel_indexing` コマンド、`AtomicBool` キャンセルトークン）
+- 中断時のベクトルembedding途中保存（処理済みファイル単位でキャッシュ保存、差分更新で再開可能）
+- インデックス作成ダイアログ（`IndexingDialog` コンポーネント、確認→進捗→完了→中断済みの状態遷移）
+
+### Changed
+
+- `build_index` コマンドに `total_files` パラメータを追加（進捗計算用）
+- ベクトルインデックスのフルビルド・差分更新にキャンセルチェックを追加
+
 ## [0.2.0] - 2026-03-29
 
 ### Added

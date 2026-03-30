@@ -201,6 +201,21 @@ impl VectorCache {
         metas: &[ChunkMeta],
         embeddings: &[Embedding],
     ) -> Result<(), String> {
+        let fingerprints = Self::scan_fingerprints(folder_path);
+        self.save_with_fingerprints(folder_path, metas, embeddings, fingerprints)
+    }
+
+    /// embeddingデータをキャッシュに保存する（フィンガープリント明示指定版）
+    ///
+    /// 途中保存時に使用する。処理済みファイルのフィンガープリントのみを渡すことで、
+    /// 次回の `compute_diff` が未処理ファイルを `added` として正しく検出する。
+    pub fn save_with_fingerprints(
+        &self,
+        folder_path: &str,
+        metas: &[ChunkMeta],
+        embeddings: &[Embedding],
+        fingerprints: HashMap<String, FileFingerprint>,
+    ) -> Result<(), String> {
         let cache_dir = self.cache_dir_for(folder_path);
         std::fs::create_dir_all(&cache_dir)
             .map_err(|e| format!("キャッシュディレクトリ作成失敗: {}", e))?;
@@ -211,6 +226,7 @@ impl VectorCache {
         };
         let bin = bincode::serialize(&cached)
             .map_err(|e| format!("キャッシュシリアライズ失敗: {}", e))?;
+        // embeddings.bin を先に書く（manifest.jsonが存在しなければキャッシュ無効と判定される）
         std::fs::write(cache_dir.join("embeddings.bin"), bin)
             .map_err(|e| format!("キャッシュ書き込み失敗: {}", e))?;
 
@@ -218,7 +234,7 @@ impl VectorCache {
         let manifest = CacheManifest {
             format_version: FORMAT_VERSION,
             folder_path: folder_path.to_string(),
-            file_fingerprints: Self::scan_fingerprints(folder_path),
+            file_fingerprints: fingerprints,
             chunk_count: metas.len(),
             embedding_dimension: dim,
         };
@@ -228,6 +244,32 @@ impl VectorCache {
             .map_err(|e| format!("マニフェスト書き込み失敗: {}", e))?;
 
         Ok(())
+    }
+
+    /// 指定ファイルのフィンガープリントを収集する
+    pub fn collect_fingerprints_for(
+        file_paths: &std::collections::HashSet<String>,
+    ) -> HashMap<String, FileFingerprint> {
+        let mut fingerprints = HashMap::new();
+        for path_str in file_paths {
+            let path = std::path::Path::new(path_str);
+            if let Ok(metadata) = std::fs::metadata(path) {
+                let modified = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                fingerprints.insert(
+                    path_str.clone(),
+                    FileFingerprint {
+                        size: metadata.len(),
+                        modified,
+                    },
+                );
+            }
+        }
+        fingerprints
     }
 }
 
