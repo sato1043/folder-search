@@ -28,6 +28,7 @@
 - 全文検索インデックスをフォルダごとに保持（フォルダ切替時にフルビルド不要）
 - インデックスのディレクトリ構造を `index/{hash}/fulltext/`, `index/{hash}/vector/` に統一（フォルダ主体の階層）
 - `build_index` コマンドから `index_path` パラメータを削除（内部でappDataDir + フォルダハッシュから自動算出）
+- `build_index` コマンドを async + spawn_blocking に変更（インデックス構築中のUI固まりを解消）
 - サイドバーのEmbeddingモデル手動ダウンロードボタンを削除（起動時自動DLに移行）
 - `build_index` コマンドに `total_files` パラメータを追加（進捗計算用）
 - ベクトルインデックスのフルビルド・差分更新にキャンセルチェックを追加

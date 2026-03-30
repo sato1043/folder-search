@@ -147,7 +147,7 @@ pub fn cancel_indexing(state: State<'_, AppState>) {
 
 /// 全文検索インデックスを構築する
 #[tauri::command]
-pub fn build_index(
+pub async fn build_index(
     app: tauri::AppHandle,
     folder_path: String,
     total_files: u64,
@@ -158,7 +158,6 @@ pub fn build_index(
         .join("index")
         .join(vector_cache::folder_hash(&folder_path))
         .join("fulltext");
-    let index_path_str = index_path.to_string_lossy().to_string();
 
     // キャンセルトークンをリセット
     state.cancel_token.store(false, Ordering::Relaxed);
@@ -169,30 +168,39 @@ pub fn build_index(
         *watcher_guard = None;
     }
 
-    let mut engine = TantivySearchEngine::new(&index_path_str)
-        .map_err(|e| format!("インデックス作成失敗: {}", e))?;
+    // 重い処理をブロッキングスレッドで実行（WebViewスレッドを解放）
+    let cancel_token = state.cancel_token.clone();
+    let app_clone = app.clone();
+    let folder_path_clone = folder_path.clone();
+    let index_path_clone = index_path.clone();
+    let (engine, count) = tokio::task::spawn_blocking(move || {
+        let index_path_str = index_path_clone.to_string_lossy().to_string();
+        let mut engine = TantivySearchEngine::new(&index_path_str)
+            .map_err(|e| format!("インデックス作成失敗: {}", e))?;
 
-    let cancel_token = &state.cancel_token;
-    let app_ref = &app;
-    let count = match engine.index_folder_cancellable(
-        &folder_path,
-        cancel_token,
-        total_files,
-        |current, total| {
-            let _ = app_ref.emit(
-                "fulltext-index-progress",
-                serde_json::json!({ "current": current, "total": total }),
-            );
-        },
-    ) {
-        Ok(count) => count,
-        Err(crate::domain::indexer::IndexError::Cancelled) => {
-            // 中断 → インデックスディレクトリ削除
-            let _ = std::fs::remove_dir_all(&index_path);
-            return Err("インデックス作成が中断された".to_string());
-        }
-        Err(e) => return Err(format!("インデックス構築失敗: {}", e)),
-    };
+        let count = match engine.index_folder_cancellable(
+            &folder_path_clone,
+            &cancel_token,
+            total_files,
+            |current, total| {
+                let _ = app_clone.emit(
+                    "fulltext-index-progress",
+                    serde_json::json!({ "current": current, "total": total }),
+                );
+            },
+        ) {
+            Ok(count) => count,
+            Err(crate::domain::indexer::IndexError::Cancelled) => {
+                let _ = std::fs::remove_dir_all(&index_path_clone);
+                return Err("インデックス作成が中断された".to_string());
+            }
+            Err(e) => return Err(format!("インデックス構築失敗: {}", e)),
+        };
+
+        Ok::<_, String>((engine, count))
+    })
+    .await
+    .map_err(|e| format!("タスク実行失敗: {}", e))??;
 
     {
         let mut guard = state.engine.lock().map_err(|e| e.to_string())?;
