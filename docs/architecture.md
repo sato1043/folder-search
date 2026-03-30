@@ -370,8 +370,8 @@ LLMモデル取得・ロード（設定ダイアログ）
 
 | データ | 保存場所 | 形式 |
 |---|---|---|
-| 全文検索インデックス | `{app_data}/index/fulltext/{hash}/` | tantivy独自形式 |
-| ベクトルキャッシュ | `{app_data}/index/vector/{hash}/` | manifest.json + embeddings.bin（bincode） |
+| 全文検索インデックス | `{app_data}/index/{hash}/fulltext/` | tantivy独自形式 |
+| ベクトルキャッシュ | `{app_data}/index/{hash}/vector/` | manifest.json + embeddings.bin（bincode） |
 | アプリ設定 | `{model_dir}/settings.json` | JSON |
 | embeddingモデル | `{model_dir}/model.onnx`, `tokenizer.json` | ONNX, JSON |
 | LLMモデル | `{model_dir}/*.gguf` | GGUF |

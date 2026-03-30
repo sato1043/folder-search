@@ -64,31 +64,11 @@ pub fn run() {
             if let Ok(app_data_dir) = app.path().app_data_dir() {
                 let validation = state.index_validation.clone();
                 std::thread::spawn(move || {
-                    // 全文検索インデックスの検証（フォルダごとのサブディレクトリを列挙）
-                    let fulltext_base = app_data_dir.join("index").join("fulltext");
-                    if fulltext_base.exists() {
-                        if let Ok(entries) = std::fs::read_dir(&fulltext_base) {
-                            for entry in entries.flatten() {
-                                let path = entry.path();
-                                if !path.is_dir() {
-                                    continue;
-                                }
-                                if !tantivy_infra::validate_index(&path) {
-                                    eprintln!(
-                                        "BG検証: 全文検索インデックスの破損を検出、削除: {:?}",
-                                        path
-                                    );
-                                    let _ = std::fs::remove_dir_all(&path);
-                                }
-                                std::thread::sleep(std::time::Duration::from_millis(100));
-                            }
-                        }
-                    }
-
-                    // ベクトルキャッシュの検証
                     let cache = vector_cache::VectorCache::new(&app_data_dir);
-                    for cache_dir in cache.list_cache_dirs() {
-                        let hash = cache_dir
+
+                    // index/{hash}/ を列挙し、各ハッシュ内の fulltext/ と vector/ を検証
+                    for hash_dir in cache.list_index_dirs() {
+                        let hash = hash_dir
                             .file_name()
                             .and_then(|n| n.to_str())
                             .unwrap_or("")
@@ -102,13 +82,28 @@ pub fn run() {
                         // 検証中ハッシュをセット
                         *validation.current_hash.lock().unwrap() = Some(hash.clone());
 
-                        // 検証実行
-                        if !vector_cache::validate_cache_dir(&cache_dir) {
+                        // 全文検索インデックスの検証
+                        let fulltext_path = hash_dir.join("fulltext");
+                        if fulltext_path.exists()
+                            && !tantivy_infra::validate_index(&fulltext_path)
+                        {
+                            eprintln!(
+                                "BG検証: 全文検索インデックスの破損を検出、削除: {:?}",
+                                fulltext_path
+                            );
+                            let _ = std::fs::remove_dir_all(&fulltext_path);
+                        }
+
+                        // ベクトルキャッシュの検証
+                        let vector_path = hash_dir.join("vector");
+                        if vector_path.exists()
+                            && !vector_cache::validate_cache_dir(&vector_path)
+                        {
                             eprintln!(
                                 "BG検証: ベクトルキャッシュの破損を検出、削除: {:?}",
-                                cache_dir
+                                vector_path
                             );
-                            let _ = std::fs::remove_dir_all(&cache_dir);
+                            let _ = std::fs::remove_dir_all(&vector_path);
                         }
 
                         // 検証中ハッシュをクリア・完了に追加・通知

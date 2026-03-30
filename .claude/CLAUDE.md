@@ -80,8 +80,8 @@ Tauri の `appDataDir` に対応する。identifier は `com.foldersearch.deskto
 | macOS | `~/Library/Application Support/com.foldersearch.desktop/` |
 
 主な内容:
-- `index/fulltext/` — tantivy 全文検索インデックス
-- `index/vector/{hash}/` — ベクトルキャッシュ（manifest.json + embeddings.bin）
+- `index/{hash}/fulltext/` — tantivy 全文検索インデックス（フォルダごと）
+- `index/{hash}/vector/` — ベクトルキャッシュ（manifest.json + embeddings.bin、フォルダごと）
 
 ## 開発ルール
 

@@ -79,15 +79,17 @@ SearchResult { path, title, snippet, score }
 ```
 {appDataDir}/
 └── index/
-    ├── fulltext/
-    │   ├── {hash_A}/          ← フォルダAの全文検索インデックス（tantivy形式）
-    │   └── {hash_B}/          ← フォルダBの全文検索インデックス
-    └── vector/
-        ├── {hash_A}/          ← フォルダAのベクトルキャッシュ
-        │   ├── manifest.json  ← メタデータ（バージョン、フィンガープリント等）
-        │   └── embeddings.bin ← embedding + チャンクメタ（bincode形式）
-        └── {hash_B}/          ← フォルダBのベクトルキャッシュ
+    ├── {hash_A}/              ← フォルダAのインデックス
+    │   ├── fulltext/          ← 全文検索インデックス（tantivy形式）
+    │   └── vector/            ← ベクトルキャッシュ
+    │       ├── manifest.json  ← メタデータ（バージョン、フィンガープリント等）
+    │       └── embeddings.bin ← embedding + チャンクメタ（bincode形式）
+    └── {hash_B}/              ← フォルダBのインデックス
+        ├── fulltext/
+        └── vector/
 ```
+
+フォルダが主体で、その配下にインデックス種別が並ぶ構造。フォルダのキャッシュ丸ごと削除は `index/{hash}/` 1つで済む。
 
 ### appDataDir のプラットフォーム別パス
 
@@ -118,7 +120,7 @@ pub fn folder_hash(folder_path: &str) -> String {
 ### 概要
 
 - **エンジン**: tantivy 0.25 + lindera 2（IPAdic辞書）
-- **保存場所**: `index/fulltext/{hash}/`
+- **保存場所**: `index/{hash}/fulltext/`
 - **形式**: tantivy MmapDirectory
 - **保持**: フォルダごとに独立保持。フォルダ切替時にフルビルド不要
 
@@ -133,7 +135,7 @@ pub fn folder_hash(folder_path: &str) -> String {
 ### 構築フロー
 
 1. `build_index` コマンド呼び出し（フロントエンドから `folder_path` と `total_files` を渡す）
-2. Rust側で `app_data_dir + "/index/fulltext/" + folder_hash(folder_path)` を算出
+2. Rust側で `app_data_dir + "/index/" + folder_hash(folder_path) + "/fulltext"` を算出
 3. `TantivySearchEngine::new()` でインデックスを開く（既存あれば open、なければ create）
 4. `delete_all_documents()` で既存データをクリア
 5. フォルダ走査（`.txt`, `.md` のみ）→ ドキュメント追加
@@ -149,7 +151,7 @@ pub fn folder_hash(folder_path: &str) -> String {
 ### 概要
 
 - **embeddingモデル**: intfloat/multilingual-e5-small（384次元、ONNX形式）
-- **保存場所**: `index/vector/{hash}/`
+- **保存場所**: `index/{hash}/vector/`
 - **形式**: `manifest.json`（メタデータ）+ `embeddings.bin`（bincode）
 - **保持**: フォルダごとに独立保持
 
@@ -256,17 +258,13 @@ pub fn validate_cache_dir(cache_dir: &Path) -> bool
 setup hookで `std::thread::spawn` により低優先度スレッドを起動する。
 
 ```
-1. index/fulltext/ 配下のサブディレクトリを列挙
-   → 各ディレクトリを validate_index() で検証
-   → 破損 → ディレクトリ削除
-   → 100ms sleep
-
-2. index/vector/ 配下のサブディレクトリを列挙
-   → reserved（フォルダ選択で予約済み）ならスキップ
-   → current_hash をセットして検証
-   → 破損 → ディレクトリ削除
-   → current_hash クリア + completed に追加 + notify
-   → 100ms sleep
+index/ 配下のハッシュディレクトリを列挙
+  → reserved（フォルダ選択で予約済み）ならスキップ
+  → current_hash をセット
+  → {hash}/fulltext/ を validate_index() で検証 → 破損 → 削除
+  → {hash}/vector/ を validate_cache_dir() で検証 → 破損 → 削除
+  → current_hash クリア + completed に追加 + notify
+  → 100ms sleep
 ```
 
 100ms の sleep はUIスレッドの動きを止めないための優先度低下措置。

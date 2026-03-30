@@ -64,13 +64,15 @@ pub struct VectorCache {
 impl VectorCache {
     pub fn new(app_data_dir: &Path) -> Self {
         Self {
-            base_dir: app_data_dir.join("index").join("vector"),
+            base_dir: app_data_dir.join("index"),
         }
     }
 
     /// フォルダパスからキャッシュディレクトリを算出する
     pub fn cache_dir_for(&self, folder_path: &str) -> PathBuf {
-        self.base_dir.join(folder_hash(folder_path))
+        self.base_dir
+            .join(folder_hash(folder_path))
+            .join("vector")
     }
 
     /// フォルダ内の対象ファイルのフィンガープリントを収集する
@@ -251,8 +253,23 @@ impl VectorCache {
         Ok(())
     }
 
-    /// base_dir内の全キャッシュディレクトリを列挙する
+    /// 全ベクトルキャッシュディレクトリを列挙する（index/{hash}/vector/）
     pub fn list_cache_dirs(&self) -> Vec<PathBuf> {
+        if !self.base_dir.exists() {
+            return Vec::new();
+        }
+        std::fs::read_dir(&self.base_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.path().is_dir())
+            .map(|e| e.path().join("vector"))
+            .filter(|p| p.exists())
+            .collect()
+    }
+
+    /// 全インデックスハッシュディレクトリを列挙する（index/{hash}/）
+    pub fn list_index_dirs(&self) -> Vec<PathBuf> {
         if !self.base_dir.exists() {
             return Vec::new();
         }
@@ -585,14 +602,32 @@ mod tests {
         // base_dirが存在しない場合は空
         assert!(cache.list_cache_dirs().is_empty());
 
-        // ディレクトリを作成
-        let base = tmp.path().join("index").join("vector");
-        std::fs::create_dir_all(base.join("abc123")).unwrap();
-        std::fs::create_dir_all(base.join("def456")).unwrap();
+        // index/{hash}/vector/ 構造を作成
+        let base = tmp.path().join("index");
+        std::fs::create_dir_all(base.join("abc123").join("vector")).unwrap();
+        std::fs::create_dir_all(base.join("def456").join("vector")).unwrap();
+        // vectorサブディレクトリがないハッシュは含まれない
+        std::fs::create_dir_all(base.join("ghi789").join("fulltext")).unwrap();
         // ファイルはリストに含まれない
         std::fs::write(base.join("not-a-dir.txt"), "x").unwrap();
 
         let dirs = cache.list_cache_dirs();
+        assert_eq!(dirs.len(), 2);
+    }
+
+    #[test]
+    fn test_list_index_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = VectorCache::new(tmp.path());
+
+        assert!(cache.list_index_dirs().is_empty());
+
+        let base = tmp.path().join("index");
+        std::fs::create_dir_all(base.join("abc123")).unwrap();
+        std::fs::create_dir_all(base.join("def456")).unwrap();
+        std::fs::write(base.join("not-a-dir.txt"), "x").unwrap();
+
+        let dirs = cache.list_index_dirs();
         assert_eq!(dirs.len(), 2);
     }
 }

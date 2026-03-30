@@ -156,8 +156,8 @@ pub fn build_index(
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let index_path = app_data_dir
         .join("index")
-        .join("fulltext")
-        .join(vector_cache::folder_hash(&folder_path));
+        .join(vector_cache::folder_hash(&folder_path))
+        .join("fulltext");
     let index_path_str = index_path.to_string_lossy().to_string();
 
     // キャンセルトークンをリセット
@@ -1165,9 +1165,9 @@ pub fn validate_folder_indexes(
 ) -> Result<IndexValidationResult, String> {
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let hash = vector_cache::folder_hash(&folder_path);
-    let fulltext_path = app_data_dir.join("index").join("fulltext").join(&hash);
-    let cache = VectorCache::new(&app_data_dir);
-    let cache_dir = cache.cache_dir_for(&folder_path);
+    let hash_dir = app_data_dir.join("index").join(&hash);
+    let fulltext_path = hash_dir.join("fulltext");
+    let cache_dir = hash_dir.join("vector");
 
     let validation = &state.index_validation;
 
