@@ -5,6 +5,12 @@
 フォーマットは [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に準拠する。
 バージョニングは [Semantic Versioning](https://semver.org/lang/ja/) に従う。
 
+## [0.3.1] - 2026-04-01
+
+### Fixed
+
+- IME変換中のEnterキーで検索が実行される問題を修正（macOS）
+
 ## [0.3.0] - 2026-03-30
 
 ### Added
