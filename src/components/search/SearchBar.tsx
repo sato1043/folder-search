@@ -16,6 +16,7 @@ export function SearchBar({
   const [query, setQuery] = useState("");
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.nativeEvent.isComposing) return;
     if (e.key === "Enter" && query.trim() !== "") {
       onSearch(query.trim());
     }

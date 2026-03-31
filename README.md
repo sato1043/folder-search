@@ -148,6 +148,18 @@ Tauri v2の2層構成（WebView + Rustネイティブレイヤー）を採用し
 - [手動E2Eテスト項目](docs/manual-e2e-tests.md)
 - [リリース手順](docs/RELEASING.md)
 
+## 既知の制限事項
+
+### WSL2環境での日本語入力
+
+WSLg上のGUIアプリではWindows側のIMEが利用できない（[microsoft/wslg#9](https://github.com/microsoft/wslg/issues/9)）。これはTauriやFolder Search固有の問題ではなく、WSLgプラットフォームの制限である。
+
+WSLgのWaylandコンポジターが外部IME（fcitx5等）の `input_method` バインドを拒否するため、Linux IMEによる回避も現時点では機能しない。
+
+**ワークアラウンド**: Windows側で日本語テキストを入力し、クリップボード経由（Ctrl+V）で貼り付ける。
+
+なお、Linux環境全般でTauri v2のIME変換ウィンドウが入力フィールドから離れて表示される問題が報告されている（[tauri-apps/tauri#11412](https://github.com/tauri-apps/tauri/issues/11412)）。上流の修正待ちの状態である。
+
 ## ライセンス
 
 [MIT License](LICENSE)

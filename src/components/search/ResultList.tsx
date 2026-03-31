@@ -19,6 +19,7 @@ export function ResultList({ results, onSelect }: ResultListProps) {
           role="button"
           tabIndex={0}
           onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing) return;
             if (e.key === "Enter") onSelect(result);
           }}
         >

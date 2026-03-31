@@ -17,6 +17,20 @@ describe("SearchBar", () => {
     expect(onSearch).toHaveBeenCalledWith("Rust");
   });
 
+  it("IME変換中のEnterキーでは検索を実行しない", () => {
+    const onSearch = vi.fn();
+    render(<SearchBar onSearch={onSearch} />);
+    const input = screen.getByPlaceholderText("検索...");
+    fireEvent.change(input, { target: { value: "テスト" } });
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      isComposing: true,
+      bubbles: true,
+    });
+    input.dispatchEvent(event);
+    expect(onSearch).not.toHaveBeenCalled();
+  });
+
   it("空文字では検索を実行しない", () => {
     const onSearch = vi.fn();
     render(<SearchBar onSearch={onSearch} />);
