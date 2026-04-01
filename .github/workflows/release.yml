@@ -60,6 +60,7 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CMAKE_MSVC_RUNTIME_LIBRARY: ${{ matrix.platform == 'windows-latest' && 'MultiThreadedDLL' || '' }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Folder Search ${{ github.ref_name }}'
