@@ -61,7 +61,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LLAMA_STATIC_CRT: ${{ matrix.platform == 'windows-latest' && '1' || '' }}
-          CMAKE_GENERATOR: ${{ matrix.platform == 'windows-latest' && 'Visual Studio 17 2022' || '' }}
+          CFLAGS: ${{ matrix.platform == 'windows-latest' && '/DWIN32 /D_WINDOWS /W3 /MT' || '' }}
+          CXXFLAGS: ${{ matrix.platform == 'windows-latest' && '/DWIN32 /D_WINDOWS /W3 /GR /EHsc /MT' || '' }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Folder Search ${{ github.ref_name }}'
