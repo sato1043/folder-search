@@ -67,7 +67,8 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          LLAMA_BUILD_SHARED_LIBS: ${{ matrix.platform == 'windows-latest' && '1' || '' }}
+          LLAMA_STATIC_CRT: ${{ matrix.platform == 'windows-latest' && '1' || '' }}
+          BUILD_DEBUG: ${{ matrix.platform == 'windows-latest' && '1' || '' }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Folder Search ${{ github.ref_name }}'
