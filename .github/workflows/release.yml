@@ -49,13 +49,6 @@ jobs:
         if: matrix.platform == 'windows-latest'
         run: choco install cmake llvm
 
-      - name: Debug env (Windows)
-        if: matrix.platform == 'windows-latest'
-        run: |
-          echo "CMAKE_GENERATOR=$env:CMAKE_GENERATOR"
-          echo "NINJA=$(where ninja 2>$null)"
-          echo "CMAKE=$(where cmake 2>$null)"
-
       - name: Install dependencies (macOS)
         if: contains(matrix.platform, 'macos')
         run: brew install cmake
@@ -67,8 +60,6 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          LLAMA_STATIC_CRT: ${{ matrix.platform == 'windows-latest' && '1' || '' }}
-          BUILD_DEBUG: ${{ matrix.platform == 'windows-latest' && '1' || '' }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Folder Search ${{ github.ref_name }}'
