@@ -60,6 +60,7 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LLAMA_STATIC_CRT: ${{ matrix.platform == 'windows-latest' && '1' || '' }}
           CXXFLAGS: ${{ matrix.platform == 'windows-latest' && '/MT' || '' }}
         with:
           tagName: ${{ github.ref_name }}
