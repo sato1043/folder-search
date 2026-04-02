@@ -24,7 +24,7 @@ tantivy = "0.25"
 lindera = { version = "2", features = ["embed-ipadic"] }
 lindera-tantivy = { version = "2", features = ["embed-ipadic"] }
 walkdir = "2"
-ort = "2.0.0-rc.12"
+ort = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
 ndarray = "0.17"
 hnsw_rs = "0.3"
 anndists = "0.1"
