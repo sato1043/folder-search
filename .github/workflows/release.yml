@@ -49,6 +49,13 @@ jobs:
         if: matrix.platform == 'windows-latest'
         run: choco install cmake llvm
 
+      - name: Debug env (Windows)
+        if: matrix.platform == 'windows-latest'
+        run: |
+          echo "CMAKE_GENERATOR=$env:CMAKE_GENERATOR"
+          echo "NINJA=$(where ninja 2>$null)"
+          echo "CMAKE=$(where cmake 2>$null)"
+
       - name: Install dependencies (macOS)
         if: contains(matrix.platform, 'macos')
         run: brew install cmake
