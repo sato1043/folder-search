@@ -61,8 +61,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LLAMA_STATIC_CRT: ${{ matrix.platform == 'windows-latest' && '1' || '' }}
-          CFLAGS: ${{ matrix.platform == 'windows-latest' && '/MT' || '' }}
-          CXXFLAGS: ${{ matrix.platform == 'windows-latest' && '/MT' || '' }}
+          CMAKE_C_FLAGS_RELEASE: ${{ matrix.platform == 'windows-latest' && '/MT /O2 /DNDEBUG /Ob2' || '' }}
+          CMAKE_CXX_FLAGS_RELEASE: ${{ matrix.platform == 'windows-latest' && '/MT /O2 /DNDEBUG /Ob2' || '' }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Folder Search ${{ github.ref_name }}'
