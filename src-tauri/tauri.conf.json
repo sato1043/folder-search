@@ -29,10 +29,7 @@
     "icon": [
       "icons/icon.ico"
     ],
-    "resources": {
-      "target/release/*.dll": "./",
-      "target/release/*.dylib": "./"
-    }
+    "resources": {}
   },
   "plugins": {}
 }
