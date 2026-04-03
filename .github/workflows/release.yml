@@ -60,17 +60,29 @@ jobs:
 
       - name: Download ONNX Runtime DLL (Windows)
         if: matrix.platform == 'windows-latest'
-        shell: pwsh
+        shell: python
         run: |
-          $url = "https://cdn.pyke.io/0/pyke:ort-rs/ms@1.24.2/x86_64-pc-windows-msvc.tar.lzma2"
-          $archive = "$env:TEMP\ort.tar.lzma2"
-          curl -L -o $archive $url
-          cd $env:TEMP
-          7z x ort.tar.lzma2 -y
-          7z x ort.tar -y
-          cd $env:GITHUB_WORKSPACE
-          Get-ChildItem "$env:TEMP" -Recurse -Filter "onnxruntime*.dll" | Copy-Item -Destination "src-tauri\target\release\" -Force
-          Get-ChildItem "src-tauri\target\release\*.dll" | ForEach-Object { Write-Host $_.Name }
+          import urllib.request, lzma, tarfile, os, glob
+          url = "https://cdn.pyke.io/0/pyke:ort-rs/ms@1.24.2/x86_64-pc-windows-msvc.tar.lzma2"
+          dest = os.path.join("src-tauri", "target", "release")
+          print(f"Downloading {url}")
+          data, _ = urllib.request.urlretrieve(url)
+          with open(data, "rb") as f:
+              raw = f.read()
+          print(f"Decompressing {len(raw)} bytes (lzma)")
+          decompressed = lzma.decompress(raw)
+          tar_path = os.path.join(os.environ["TEMP"], "ort.tar")
+          with open(tar_path, "wb") as f:
+              f.write(decompressed)
+          print("Extracting tar")
+          with tarfile.open(tar_path) as tar:
+              for member in tar.getmembers():
+                  if member.name.endswith(".dll"):
+                      member.name = os.path.basename(member.name)
+                      tar.extract(member, dest)
+                      print(f"  Extracted: {member.name}")
+          for dll in glob.glob(os.path.join(dest, "*.dll")):
+              print(f"  DLL: {os.path.basename(dll)}")
 
       - name: Configure bundle resources (Windows)
         if: matrix.platform == 'windows-latest'
