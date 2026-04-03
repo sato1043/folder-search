@@ -5,6 +5,20 @@
 フォーマットは [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に準拠する。
 バージョニングは [Semantic Versioning](https://semver.org/lang/ja/) に従う。
 
+## [0.3.2] - 2026-04-03
+
+### Fixed
+
+- IME変換中のEnterキーで検索が実行される問題を修正（macOS）
+- Windows リリースビルドのMSVC CRTリンクエラーを修正（esaxx_fast無効化による/MT・/MD不一致の解消）
+- macOS リリースビルドの`std::filesystem`エラーを修正（MACOSX_DEPLOYMENT_TARGET=12.0設定）
+
+### Changed
+
+- tokenizersのesaxx_fast featureを無効化（BPEトレーニング速度のみに影響、推論には無影響）
+- tauri.conf.jsonにbundleセクションを追加（msi/nsis/dmgインストーラ生成を有効化）
+- macOS Intel (x86_64)ビルドを一時的に除外（ort-sysのプリビルドバイナリ未提供のため）
+
 ## [0.3.1] - 2026-04-01
 
 ### Fixed

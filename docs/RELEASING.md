@@ -77,13 +77,14 @@ git push origin main --tags
 
 タグのプッシュにより `.github/workflows/release.yml` が起動する。
 
-以下の3プラットフォームで並行ビルドが実行される。
+以下のプラットフォームで並行ビルドが実行される。
 
 | プラットフォーム | ランナー | 成果物 |
 |---|---|---|
 | Windows | windows-latest | `.msi`, `.exe` |
-| macOS (Intel) | macos-14 | `.dmg` |
 | macOS (Apple Silicon) | macos-latest | `.dmg` |
+
+※ macOS Intel (x86_64) はort-sysのプリビルドバイナリ未提供のため一時的に除外している。
 
 ビルド完了後、**ドラフトリリース**としてGitHub Releasesに成果物がアップロードされる。
 

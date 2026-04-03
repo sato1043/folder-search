@@ -15,8 +15,6 @@ jobs:
         include:
           - platform: windows-latest
             args: ''
-          - platform: macos-14
-            args: '--target x86_64-apple-darwin'
           - platform: macos-latest
             args: '--target aarch64-apple-darwin'
 
@@ -60,6 +58,8 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '12.0' || '' }}
+          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '12.0' || '' }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Folder Search ${{ github.ref_name }}'

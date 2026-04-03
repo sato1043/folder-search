@@ -1,6 +1,6 @@
 [package]
 name = "folder-search"
-version = "0.3.1"
+version = "0.3.2"
 description = "Local knowledge base search application"
 authors = ["sato1043@updater.cc"]
 edition = "2021"
@@ -28,7 +28,7 @@ ort = "2.0.0-rc.12"
 ndarray = "0.17"
 hnsw_rs = "0.3"
 anndists = "0.1"
-tokenizers = "0.22"
+tokenizers = { version = "0.22", default-features = false, features = ["progressbar", "onig"] }
 reqwest = { version = "0.13", features = ["stream"] }
 tokio = { version = "1", features = ["fs", "io-util"] }
 futures-util = "0.3"
@@ -39,6 +39,9 @@ sha2 = "0.10"
 notify = "7"
 notify-debouncer-mini = "0.5"
 sysinfo = "0.32"
+
+# Windows CRT注記: esaxx_fast無効化(tokenizers)により全C/C++オブジェクトが
+# /MD(動的CRT)に統一されているため、load-dynamic/dynamic-linkは不要。
 
 [features]
 default = []

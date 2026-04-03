@@ -118,3 +118,17 @@ E2Eテスト（WebdriverIO + tauri-driver）はローカルでは動作するが
 
 - ダウンロードだけでなくインデックスキャッシュサイズも含めた「キャッシュサイズ」設定に変える
 
+---
+
+## macOS Intel (x86_64) ビルド対応
+
+### 背景
+
+ort-sys 2.0.0-rc.12がx86_64-apple-darwin向けのプリビルドバイナリを提供していないため、macOS Intelのリリースビルドを一時除外している。
+
+### 検討事項
+
+- ort-sysの将来バージョンでのx86_64対応状況を確認
+- ONNX Runtimeをソースからビルドする方法
+- ortの`load-dynamic` featureでリンクをバイパスしDLLを別途配布する方法
+
