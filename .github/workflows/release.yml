@@ -67,12 +67,14 @@ jobs:
       - name: Configure bundle resources (macOS)
         if: contains(matrix.platform, 'macos')
         run: |
+          TARGET=$(echo "${{ matrix.args }}" | sed 's/--target //')
           python3 -c "
-          import json
+          import json, sys
+          target = sys.argv[1]
           with open('src-tauri/tauri.conf.json') as f: conf = json.load(f)
-          conf['bundle']['resources'] = {'target/release/*.dylib': './'}
+          conf['bundle']['resources'] = {f'target/{target}/release/*.dylib': './'}
           with open('src-tauri/tauri.conf.json', 'w') as f: json.dump(conf, f, indent=2)
-          "
+          " "$TARGET"
 
       - name: Build and release
         uses: tauri-apps/tauri-action@v0
