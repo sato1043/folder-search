@@ -54,44 +54,6 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install
 
-      - name: Pre-build Rust (Windows, creates DLLs)
-        if: matrix.platform == 'windows-latest'
-        run: cargo build --release --manifest-path src-tauri/Cargo.toml
-
-      - name: Download ONNX Runtime DLL (Windows)
-        if: matrix.platform == 'windows-latest'
-        shell: python
-        run: |
-          import urllib.request, lzma, tarfile, os, glob
-          url = "https://cdn.pyke.io/0/pyke:ort-rs/ms@1.24.2/x86_64-pc-windows-msvc.tar.lzma2"
-          dest = os.path.join("src-tauri", "target", "release")
-          print(f"Downloading {url}")
-          data, _ = urllib.request.urlretrieve(url)
-          with open(data, "rb") as f:
-              raw = f.read()
-          print(f"Decompressing {len(raw)} bytes (lzma)")
-          decompressed = lzma.decompress(raw)
-          tar_path = os.path.join(os.environ["TEMP"], "ort.tar")
-          with open(tar_path, "wb") as f:
-              f.write(decompressed)
-          print("Extracting tar")
-          with tarfile.open(tar_path) as tar:
-              for member in tar.getmembers():
-                  if member.name.endswith(".dll"):
-                      member.name = os.path.basename(member.name)
-                      tar.extract(member, dest)
-                      print(f"  Extracted: {member.name}")
-          for dll in glob.glob(os.path.join(dest, "*.dll")):
-              print(f"  DLL: {os.path.basename(dll)}")
-
-      - name: Configure bundle resources (Windows)
-        if: matrix.platform == 'windows-latest'
-        shell: pwsh
-        run: |
-          $conf = Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json
-          $conf.bundle.resources = @{ "target/release/*.dll" = "./" }
-          $conf | ConvertTo-Json -Depth 10 | Set-Content src-tauri/tauri.conf.json
-
       - name: Build and release
         uses: tauri-apps/tauri-action@v0
         env:

@@ -40,9 +40,8 @@ notify = "7"
 notify-debouncer-mini = "0.5"
 sysinfo = "0.32"
 
-[target.'cfg(windows)'.dependencies]
-ort = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
-llama-cpp-2 = { version = "0.1.140", default-features = false, features = ["dynamic-link"] }
+# Windows CRT注記: esaxx_fast無効化(tokenizers)により全C/C++オブジェクトが
+# /MD(動的CRT)に統一されているため、load-dynamic/dynamic-linkは不要。
 
 [features]
 default = []
