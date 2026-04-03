@@ -24,7 +24,7 @@ tantivy = "0.25"
 lindera = { version = "2", features = ["embed-ipadic"] }
 lindera-tantivy = { version = "2", features = ["embed-ipadic"] }
 walkdir = "2"
-ort = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
+ort = "2.0.0-rc.12"
 ndarray = "0.17"
 hnsw_rs = "0.3"
 anndists = "0.1"
@@ -32,13 +32,17 @@ tokenizers = { version = "0.22", default-features = false, features = ["progress
 reqwest = { version = "0.13", features = ["stream"] }
 tokio = { version = "1", features = ["fs", "io-util"] }
 futures-util = "0.3"
-llama-cpp-2 = { version = "0.1.140", default-features = false, features = ["dynamic-link"] }
+llama-cpp-2 = { version = "0.1.140", default-features = false }
 encoding_rs = "0.8"
 bincode = "1"
 sha2 = "0.10"
 notify = "7"
 notify-debouncer-mini = "0.5"
 sysinfo = "0.32"
+
+[target.'cfg(windows)'.dependencies]
+ort = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
+llama-cpp-2 = { version = "0.1.140", default-features = false, features = ["dynamic-link"] }
 
 [features]
 default = []
