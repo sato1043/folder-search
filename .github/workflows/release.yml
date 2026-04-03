@@ -15,8 +15,6 @@ jobs:
         include:
           - platform: windows-latest
             args: ''
-          - platform: macos-14
-            args: '--target x86_64-apple-darwin'
           - platform: macos-latest
             args: '--target aarch64-apple-darwin'
 
@@ -55,6 +53,10 @@ jobs:
 
       - name: Install frontend dependencies
         run: pnpm install
+
+      - name: Pre-build Rust (Windows, creates DLLs)
+        if: matrix.platform == 'windows-latest'
+        run: cargo build --release --manifest-path src-tauri/Cargo.toml
 
       - name: Configure bundle resources (Windows)
         if: matrix.platform == 'windows-latest'
