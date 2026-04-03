@@ -28,7 +28,7 @@ ort = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
 ndarray = "0.17"
 hnsw_rs = "0.3"
 anndists = "0.1"
-tokenizers = "0.22"
+tokenizers = { version = "0.22", default-features = false, features = ["progressbar", "onig"] }
 reqwest = { version = "0.13", features = ["stream"] }
 tokio = { version = "1", features = ["fs", "io-util"] }
 futures-util = "0.3"
