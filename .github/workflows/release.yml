@@ -62,12 +62,11 @@ jobs:
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
-          $url = "https://cdn.pyke.io/0/pyke:ort-rs/ms@1.24.2/x86_64-pc-windows-msvc.tar.lzma2"
-          $archive = "$env:TEMP\ort.tar.lzma2"
-          Invoke-WebRequest -Uri $url -OutFile $archive
-          7z x $archive -o"$env:TEMP" -y
-          7z x "$env:TEMP\ort.tar" -o"$env:TEMP\ort" -y
-          Copy-Item "$env:TEMP\ort\*.dll" -Destination "src-tauri\target\release\" -Force
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.21.1/onnxruntime-win-x64-1.21.1.zip"
+          $zip = "$env:TEMP\ort.zip"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath "$env:TEMP\ort" -Force
+          Get-ChildItem "$env:TEMP\ort" -Recurse -Filter "onnxruntime.dll" | Copy-Item -Destination "src-tauri\target\release\" -Force
           Get-ChildItem "src-tauri\target\release\*.dll" | ForEach-Object { Write-Host $_.Name }
 
       - name: Configure bundle resources (Windows)
