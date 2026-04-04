@@ -9,7 +9,6 @@
 
 ### Fixed
 
-- IME変換中のEnterキーで検索が実行される問題を修正（macOS）
 - Windows リリースビルドのMSVC CRTリンクエラーを修正（esaxx_fast無効化による/MT・/MD不一致の解消）
 - macOS リリースビルドの`std::filesystem`エラーを修正（MACOSX_DEPLOYMENT_TARGET=12.0設定）
 
