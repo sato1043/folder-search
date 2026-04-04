@@ -5,6 +5,12 @@
 フォーマットは [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に準拠する。
 バージョニングは [Semantic Versioning](https://semver.org/lang/ja/) に従う。
 
+## [0.3.3] - 2026-04-04
+
+### Added
+
+- Linux (Ubuntu) ビルドをリリースワークフローに追加（.deb, .AppImage）
+
 ## [0.3.2] - 2026-04-03
 
 ### Fixed
