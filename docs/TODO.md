@@ -120,6 +120,24 @@ E2Eテスト（WebdriverIO + tauri-driver）はローカルでは動作するが
 
 ---
 
+## バンドルファイル名のカスタマイズ
+
+### 背景
+
+productName が "Folder Search" のため、バンドルファイル名が `Folder.Search_x.y.z_amd64.deb` のようにドット区切りになる。`folder-search_x.y.z_amd64.deb` のような小文字ハイフン区切りが望ましい。
+
+### 現状
+
+Tauri v2.10 では `tauri.conf.json` にバンドルファイル名をカスタマイズするオプションが存在しない。productName から自動生成される仕組みが固定されている。
+
+### 検討事項
+
+- tauri-apps/tauri#13999 でカスタムパッケージ名の要望が出ているが未実装
+- Tauri の将来バージョンでの対応を待つ
+- 代替案: ワークフロー内でビルド後にリネームする方法（tauri-action のアップロード無効化が必要）
+
+---
+
 ## macOS Intel (x86_64) ビルド対応
 
 ### 背景
