@@ -93,13 +93,13 @@ SearchResult { path, title, snippet, score }
 
 ### appDataDir のプラットフォーム別パス
 
-identifier: `com.foldersearch.desktop`
+identifier: `cc.updater.folder-search`
 
 | OS | パス |
 |----|------|
-| Linux | `~/.local/share/com.foldersearch.desktop/` |
-| Windows | `%APPDATA%/com.foldersearch.desktop/` |
-| macOS | `~/Library/Application Support/com.foldersearch.desktop/` |
+| Linux | `~/.local/share/cc.updater.folder-search/` |
+| Windows | `%APPDATA%/cc.updater.folder-search/` |
+| macOS | `~/Library/Application Support/cc.updater.folder-search/` |
 
 ### フォルダハッシュ
 

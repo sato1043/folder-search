@@ -71,13 +71,13 @@ rm -f src-tauri/target/debug/models/model.onnx src-tauri/target/debug/models/tok
 
 ### アプリデータディレクトリ（appDataDir）
 
-Tauri の `appDataDir` に対応する。identifier は `com.foldersearch.desktop`。
+Tauri の `appDataDir` に対応する。identifier は `cc.updater.folder-search`。
 
 | OS | パス |
 |----|------|
-| Linux | `~/.local/share/com.foldersearch.desktop/` |
-| Windows | `%APPDATA%/com.foldersearch.desktop/` |
-| macOS | `~/Library/Application Support/com.foldersearch.desktop/` |
+| Linux | `~/.local/share/cc.updater.folder-search/` |
+| Windows | `%APPDATA%/cc.updater.folder-search/` |
+| macOS | `~/Library/Application Support/cc.updater.folder-search/` |
 
 主な内容:
 - `index/{hash}/fulltext/` — tantivy 全文検索インデックス（フォルダごと）
