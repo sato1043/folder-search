@@ -76,7 +76,7 @@
 **E2Eテスト時:**
 - 初回実行時にHuggingFaceからモデルを自動ダウンロードする
 - ダウンロード済みのモデルはローカルにキャッシュされ、2回目以降は再利用する
-- キャッシュ場所: `{app_data}/models/`（開発時は `src-tauri/target/debug/models/` 付近）
+- キャッシュ場所: `{appDataDir}/models/`（appDataDirはCLAUDE.mdのデータ保存場所を参照）
 
 **CI環境:**
 - CIのキャッシュ機構（GitHub Actions の `actions/cache` 等）を使い、モデルファイルをキャッシュする

@@ -22,7 +22,7 @@
 ### MET-001: embeddingモデルの起動時自動ダウンロード
 
 - **Phase**: Phase 3
-- **前提条件**: embeddingモデルが未ダウンロード状態（`rm -f src-tauri/target/debug/models/model.onnx src-tauri/target/debug/models/tokenizer.json`）
+- **前提条件**: embeddingモデルが未ダウンロード状態（`rm -f ~/.local/share/cc.updater.folder-search/models/model.onnx ~/.local/share/cc.updater.folder-search/models/tokenizer.json`、パスはOS依存）
 - **手順**:
   1. `pnpm tauri dev` でアプリを起動する
   2. ローディングオーバーレイに「Embeddingモデルをダウンロード中...」と進捗率が表示されることを確認
@@ -148,3 +148,28 @@
   5. エラーなくインデックスが再構築されることを確認する
 - **期待結果**: 破損インデックスがフォルダ選択時に検出・自動削除され、新しいインデックスが正常に構築される
 - **備考**: ベクトルキャッシュの破損テストも同様に実施可能（`{appDataDir}/index/{hash}/vector/manifest.json` を破損させる）
+
+### MET-011: モデルファイルがappDataDir配下に保存される
+
+- **Phase**: Phase 3
+- **前提条件**: embeddingモデルが未ダウンロード状態
+- **手順**:
+  1. `pnpm tauri dev` でアプリを起動する
+  2. Embeddingモデルの自動ダウンロードが完了するまで待つ
+  3. `{appDataDir}/models/model.onnx` と `{appDataDir}/models/tokenizer.json` が存在することを確認する
+  4. 設定ダイアログからLLMモデルをダウンロードする
+  5. `{appDataDir}/models/` 配下に該当の `.gguf` ファイルが存在することを確認する
+- **期待結果**: すべてのモデルファイルが `{appDataDir}/models/` 配下に保存される
+- **備考**: 旧パス（実行バイナリ隣の `models/`）にファイルが作成されないことも確認する
+
+### MET-012: 設定ファイルがappDataDir直下に保存される
+
+- **Phase**: Phase 5
+- **前提条件**: アプリが起動済み
+- **手順**:
+  1. 設定ダイアログを開く
+  2. キャッシュ容量制限などの設定を変更して保存する
+  3. `{appDataDir}/settings.json` が存在することを確認する
+  4. ファイル内容が変更した設定値を反映していることを確認する
+- **期待結果**: 設定ファイルが `{appDataDir}/settings.json` に保存される
+- **備考**: なし

@@ -59,19 +59,15 @@ pnpm format
 # Rustフォーマットチェック
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 
-# Embeddingモデル削除（自動ダウンロードの動作確認用）
-rm -f src-tauri/target/debug/models/model.onnx src-tauri/target/debug/models/tokenizer.json
+# Embeddingモデル削除（自動ダウンロードの動作確認用、Linux開発環境の例）
+rm -f ~/.local/share/cc.updater.folder-search/models/model.onnx ~/.local/share/cc.updater.folder-search/models/tokenizer.json
 ```
 
 ## データ保存場所
 
-### モデルディレクトリ（models/）
-
-実行バイナリの隣の `models/` ディレクトリ。開発時は `src-tauri/target/debug/models/`。
-
 ### アプリデータディレクトリ（appDataDir）
 
-Tauri の `appDataDir` に対応する。identifier は `cc.updater.folder-search`。
+すべてのアプリデータは Tauri の `appDataDir` 配下に保存される。identifier は `cc.updater.folder-search`。
 
 | OS | パス |
 |----|------|
@@ -80,6 +76,8 @@ Tauri の `appDataDir` に対応する。identifier は `cc.updater.folder-searc
 | macOS | `~/Library/Application Support/cc.updater.folder-search/` |
 
 主な内容:
+- `settings.json` — アプリ設定
+- `models/` — MLモデルファイル（model.onnx, tokenizer.json, *.gguf, custom_models.json）
 - `index/{hash}/fulltext/` — tantivy 全文検索インデックス（フォルダごと）
 - `index/{hash}/vector/` — ベクトルキャッシュ（manifest.json + embeddings.bin、フォルダごと）
 

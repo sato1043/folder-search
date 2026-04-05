@@ -26,29 +26,28 @@ pub fn run() {
         dotenvy::from_filename(".env.production").ok();
         dotenvy::from_filename(".env.production.local").ok();
     }
-    let model_dir = tauri::utils::platform::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("models")))
-        .unwrap_or_else(|| std::path::PathBuf::from("./models"));
-
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .manage(AppState {
-            engine: Mutex::new(None),
-            vector_index: Mutex::new(None),
-            embedding_model: Mutex::new(None),
-            llm_engine: Mutex::new(None),
-            model_registry: ModelRegistry::new(&model_dir),
-            settings_store: SettingsStore::new(&model_dir),
-            model_dir,
-            folder_path: Mutex::new(None),
-            watcher: Mutex::new(None),
-            loaded_llm_config: Mutex::new(None),
-            cancel_token: Arc::new(AtomicBool::new(false)),
-            index_validation: Arc::new(IndexValidation::new()),
-        })
         .setup(|app| {
+            let app_data_dir = app.path().app_data_dir()?;
+            let model_dir = app_data_dir.join("models");
+
+            app.manage(AppState {
+                engine: Mutex::new(None),
+                vector_index: Mutex::new(None),
+                embedding_model: Mutex::new(None),
+                llm_engine: Mutex::new(None),
+                model_registry: ModelRegistry::new(&model_dir),
+                settings_store: SettingsStore::new(&app_data_dir),
+                model_dir,
+                folder_path: Mutex::new(None),
+                watcher: Mutex::new(None),
+                loaded_llm_config: Mutex::new(None),
+                cancel_token: Arc::new(AtomicBool::new(false)),
+                index_validation: Arc::new(IndexValidation::new()),
+            });
+
             // TAURI_OPEN_DEVTOOLS=1 でDevToolsを自動で開く（デバッグビルドのみ）
             #[cfg(debug_assertions)]
             if std::env::var("TAURI_OPEN_DEVTOOLS").unwrap_or_default() == "1" {
