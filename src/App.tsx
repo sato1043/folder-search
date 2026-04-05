@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { Sidebar } from "./components/layout/Sidebar";
 import { MainPanel } from "./components/layout/MainPanel";
+import { FolderSelector } from "./components/search/FolderSelector";
 import { SearchBar } from "./components/search/SearchBar";
 import { ResultList } from "./components/search/ResultList";
 import { Preview } from "./components/search/Preview";
@@ -35,6 +36,9 @@ import {
   registerCustomModel,
   unregisterCustomModel,
   validateFolderIndexes,
+  listIndexedFolders,
+  openIndexedFolder,
+  deleteIndexedFolder,
 } from "./lib/tauri";
 import type {
   SearchResult,
@@ -47,6 +51,7 @@ import type {
   ModelRecommendation,
   DownloadedModelInfo,
   StorageUsage,
+  IndexedFolderInfo,
 } from "./types";
 
 type AppMode = "search" | "chat";
@@ -84,6 +89,10 @@ function App() {
   const [recommendations, setRecommendations] = useState<ModelRecommendation[]>([]);
   const [downloadedModels, setDownloadedModels] = useState<DownloadedModelInfo[]>([]);
   const [storageUsage, setStorageUsage] = useState<StorageUsage | null>(null);
+
+  // インデックス済みフォルダ一覧
+  const [indexedFolders, setIndexedFolders] = useState<IndexedFolderInfo[]>([]);
+  const [isOpeningFolder, setIsOpeningFolder] = useState(false);
 
   // 設定ダイアログ
   const [showSettings, setShowSettings] = useState(false);
@@ -137,6 +146,9 @@ function App() {
       .catch(() => {});
     getStorageUsage()
       .then(setStorageUsage)
+      .catch(() => {});
+    listIndexedFolders()
+      .then(setIndexedFolders)
       .catch(() => {});
 
     // 前回ロードしたモデルの自動ロード
@@ -297,6 +309,7 @@ function App() {
   /** インデックス構築を実行する（確認ダイアログ経由 or 直接） */
   const executeIndexBuild = useCallback(
     async (selected: string, fileCount: number) => {
+      let fulltextCount = 0;
       try {
         setFolderPath(selected);
         setIsIndexing(true);
@@ -307,6 +320,7 @@ function App() {
         }
 
         const count = await buildIndex(selected, fileCount);
+        fulltextCount = count;
         setIndexCount(count);
         setIsIndexing(false);
 
@@ -339,7 +353,7 @@ function App() {
           setVectorProgress("");
           setIndexingPhase({
             kind: "cancelled",
-            fulltextCount: indexCount,
+            fulltextCount,
             vectorChunks: undefined,
           });
         } else {
@@ -348,15 +362,19 @@ function App() {
           setIsBuildingVector(false);
           setIndexingPhase(null);
         }
+      } finally {
+        listIndexedFolders().then(setIndexedFolders).catch(() => {});
       }
     },
-    [modelReady, indexingPhase, indexCount],
+    [modelReady, indexingPhase],
   );
 
   const handleSelectFolder = useCallback(async () => {
     try {
       const selected = await open({ directory: true, multiple: false });
       if (!selected) return;
+
+      setIsOpeningFolder(true);
 
       // インデックスの破損検査（バックグラウンド検証との競合制御込み）
       const validation = await validateFolderIndexes(selected as string);
@@ -365,6 +383,7 @@ function App() {
       }
 
       const scan = await scanFolder(selected as string);
+      setIsOpeningFolder(false);
 
       if (scan.file_count === 0) {
         setError("対象ファイル（.txt / .md）が見つからない");
@@ -382,8 +401,80 @@ function App() {
     } catch (e) {
       setError(String(e));
       setIsIndexing(false);
+      setIsOpeningFolder(false);
     }
   }, [needsConfirmation, executeIndexBuild]);
+
+  /** 既存インデックスを読み込む */
+  const handleOpenExistingFolder = useCallback(
+    async (folderPath: string) => {
+      try {
+        setError(null);
+        setIsOpeningFolder(true);
+
+        const validation = await validateFolderIndexes(folderPath);
+        if (validation.fulltext_removed || validation.vector_cache_removed) {
+          console.warn("破損インデックスを削除:", validation);
+        }
+
+        const result = await openIndexedFolder(folderPath);
+        setFolderPath(folderPath);
+        setIndexCount(result.fulltext_count);
+        setVectorChunkCount(result.vector_chunk_count);
+        setResults(null);
+        setPreviewTitle(null);
+        setPreviewContent(null);
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setIsOpeningFolder(false);
+      }
+    },
+    [],
+  );
+
+  /** インデックスを削除する */
+  const handleDeleteIndex = useCallback(
+    async (targetPath: string) => {
+      try {
+        setError(null);
+        await deleteIndexedFolder(targetPath);
+        setFolderPath((prev) => (prev === targetPath ? null : prev));
+        setIndexCount((prev) => (folderPath === targetPath ? 0 : prev));
+        setVectorChunkCount((prev) => (folderPath === targetPath ? 0 : prev));
+        listIndexedFolders().then(setIndexedFolders).catch(() => {});
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [folderPath],
+  );
+
+  /** インデックスを再構築する */
+  const handleRebuildIndex = useCallback(
+    async (targetPath: string) => {
+      setShowSettings(false);
+      try {
+        setError(null);
+        await deleteIndexedFolder(targetPath);
+        const scan = await scanFolder(targetPath);
+        if (scan.file_count === 0) {
+          setError("対象ファイル（.txt / .md）が見つからない");
+          listIndexedFolders().then(setIndexedFolders).catch(() => {});
+          return;
+        }
+        if (needsConfirmation(scan)) {
+          pendingFolderRef.current = targetPath;
+          setIndexingPhase({ kind: "confirm", scanResult: scan });
+        } else {
+          await executeIndexBuild(targetPath, scan.file_count);
+        }
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [executeIndexBuild, needsConfirmation],
+  );
 
   /** ダイアログの[開始]ボタン */
   const handleIndexingStart = useCallback(async () => {
@@ -612,14 +703,31 @@ function App() {
             setError(String(e));
           }
         }}
+        indexedFolders={indexedFolders}
+        currentFolder={folderPath}
+        onRebuildIndex={handleRebuildIndex}
+        onDeleteIndex={handleDeleteIndex}
         onClose={() => {
           setShowSettings(false);
           refreshModelStorage();
         }}
       />
-      {(isDownloadingEmbedding || isLoadingLlm) && !showSettings && (
+      {(isDownloadingEmbedding ||
+        isLoadingLlm ||
+        isOpeningFolder ||
+        ((isIndexing || isBuildingVector) && !indexingPhase)) &&
+        !showSettings && (
         <div className="loading-overlay">
           <div className="loading-spinner" />
+          {isOpeningFolder && <p className="loading-text">フォルダを準備中...</p>}
+          {isIndexing && !indexingPhase && (
+            <p className="loading-text">全文検索インデックスを構築中...</p>
+          )}
+          {isBuildingVector && !indexingPhase && (
+            <p className="loading-text">
+              ベクトルインデックスを構築中...{vectorProgress && ` ${vectorProgress}`}
+            </p>
+          )}
           {isDownloadingEmbedding && (
             <>
               <p className="loading-text">Embeddingモデルをダウンロード中...</p>
@@ -630,7 +738,6 @@ function App() {
         </div>
       )}
       <Sidebar>
-        {folderPath && <p className="folder-path">{folderPath}</p>}
         {indexCount > 0 && <p className="index-count">{indexCount} 件のファイル</p>}
 
         <hr className="sidebar-divider" />
@@ -675,27 +782,25 @@ function App() {
         </div>
       </Sidebar>
       <MainPanel>
+        <div className="folder-selector-row">
+          <button
+            className="search-bar-icon-btn"
+            onClick={() => setShowSettings(true)}
+            title="設定"
+          >
+            &#9881;
+          </button>
+          <FolderSelector
+            folders={indexedFolders}
+            currentFolder={folderPath}
+            disabled={isIndexing || isBuildingVector || isOpeningFolder}
+            onSelectExisting={handleOpenExistingFolder}
+            onSelectNew={handleSelectFolder}
+          />
+        </div>
         {appMode === "search" ? (
           <>
-            <SearchBar onSearch={handleSearch} disabled={indexCount === 0 || isLoadingLlm}>
-              <button
-                className="search-bar-icon-btn"
-                onClick={handleSelectFolder}
-                disabled={isIndexing || isBuildingVector}
-                title="フォルダを選択"
-              >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                  <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.172a1.5 1.5 0 0 1 1.06.44l.829.828a.5.5 0 0 0 .353.146H13.5A1.5 1.5 0 0 1 15 4.914V12.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9z" />
-                </svg>
-              </button>
-              <button
-                className="search-bar-icon-btn"
-                onClick={() => setShowSettings(true)}
-                title="設定"
-              >
-                &#9881;
-              </button>
-            </SearchBar>
+            <SearchBar onSearch={handleSearch} disabled={indexCount === 0 || isLoadingLlm} />
             {error && <p className="error-message">{error}</p>}
             <div className="content-area">
               <ResultList results={results} onSelect={handleSelectResult} />
@@ -708,25 +813,7 @@ function App() {
               onSearch={handleChat}
               disabled={!llmReady || isChatting}
               placeholder="質問を入力..."
-            >
-              <button
-                className="search-bar-icon-btn"
-                onClick={handleSelectFolder}
-                disabled={isIndexing || isBuildingVector}
-                title="フォルダを選択"
-              >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                  <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.172a1.5 1.5 0 0 1 1.06.44l.829.828a.5.5 0 0 0 .353.146H13.5A1.5 1.5 0 0 1 15 4.914V12.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9z" />
-                </svg>
-              </button>
-              <button
-                className="search-bar-icon-btn"
-                onClick={() => setShowSettings(true)}
-                title="設定"
-              >
-                &#9881;
-              </button>
-            </SearchBar>
+            />
             {error && <p className="error-message">{error}</p>}
             <div className="content-area">
               <div className="chat-panel">

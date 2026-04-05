@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { GeneralSection } from "./GeneralSection";
 import { ModelManagementSection } from "./ModelManagementSection";
+import { IndexManagementSection } from "./IndexManagementSection";
 import { getSettings, saveSettings } from "../../lib/tauri";
 import type {
   AppSettings,
@@ -9,9 +10,10 @@ import type {
   ModelRecommendation,
   DownloadedModelInfo,
   StorageUsage,
+  IndexedFolderInfo,
 } from "../../types";
 
-type SettingsSection = "general" | "models";
+type SettingsSection = "general" | "models" | "indexes";
 
 type Props = {
   isOpen: boolean;
@@ -34,6 +36,10 @@ type Props = {
   onDeleteModel: (filename: string) => void;
   onRegisterCustomModel: (model: LlmModelInfo) => void;
   onUnregisterCustomModel: (filename: string) => void;
+  indexedFolders: IndexedFolderInfo[];
+  currentFolder: string | null;
+  onRebuildIndex: (folderPath: string) => void;
+  onDeleteIndex: (folderPath: string) => void;
   onClose: () => void;
 };
 
@@ -58,6 +64,10 @@ export function SettingsDialog({
   onDeleteModel,
   onRegisterCustomModel,
   onUnregisterCustomModel,
+  indexedFolders,
+  currentFolder,
+  onRebuildIndex,
+  onDeleteIndex,
   onClose,
 }: Props) {
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -137,6 +147,12 @@ export function SettingsDialog({
             >
               モデル管理
             </div>
+            <div
+              className={`settings-nav-item ${activeSection === "indexes" ? "active" : ""}`}
+              onClick={() => setActiveSection("indexes")}
+            >
+              インデックス管理
+            </div>
           </div>
           <div className="settings-content">
             {activeSection === "general" && (
@@ -159,6 +175,14 @@ export function SettingsDialog({
                 switchingModelFilename={switchingModelFilename}
                 downloadStatus={isLoadingLlm ? downloadStatus : ""}
                 onDownloadAndLoadLlm={onDownloadAndLoadLlm}
+              />
+            )}
+            {activeSection === "indexes" && (
+              <IndexManagementSection
+                indexedFolders={indexedFolders}
+                currentFolder={currentFolder}
+                onRebuild={onRebuildIndex}
+                onDelete={onDeleteIndex}
               />
             )}
             {activeSection === "models" && (

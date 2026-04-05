@@ -25,6 +25,9 @@ pub struct CacheManifest {
     pub file_fingerprints: HashMap<String, FileFingerprint>,
     pub chunk_count: usize,
     pub embedding_dimension: usize,
+    /// 構築が完了しているか（途中保存の場合は false）
+    #[serde(default)]
+    pub complete: bool,
 }
 
 /// ファイルのフィンガープリント
@@ -209,19 +212,30 @@ impl VectorCache {
         embeddings: &[Embedding],
     ) -> Result<(), String> {
         let fingerprints = Self::scan_fingerprints(folder_path);
-        self.save_with_fingerprints(folder_path, metas, embeddings, fingerprints)
+        self.save_inner(folder_path, metas, embeddings, fingerprints, true)
     }
 
-    /// embeddingデータをキャッシュに保存する（フィンガープリント明示指定版）
+    /// embeddingデータを途中保存する（フィンガープリント明示指定版）
     ///
-    /// 途中保存時に使用する。処理済みファイルのフィンガープリントのみを渡すことで、
+    /// 処理済みファイルのフィンガープリントのみを渡すことで、
     /// 次回の `compute_diff` が未処理ファイルを `added` として正しく検出する。
-    pub fn save_with_fingerprints(
+    pub fn save_partial(
         &self,
         folder_path: &str,
         metas: &[ChunkMeta],
         embeddings: &[Embedding],
         fingerprints: HashMap<String, FileFingerprint>,
+    ) -> Result<(), String> {
+        self.save_inner(folder_path, metas, embeddings, fingerprints, false)
+    }
+
+    fn save_inner(
+        &self,
+        folder_path: &str,
+        metas: &[ChunkMeta],
+        embeddings: &[Embedding],
+        fingerprints: HashMap<String, FileFingerprint>,
+        complete: bool,
     ) -> Result<(), String> {
         let cache_dir = self.cache_dir_for(folder_path);
         std::fs::create_dir_all(&cache_dir)
@@ -244,6 +258,7 @@ impl VectorCache {
             file_fingerprints: fingerprints,
             chunk_count: metas.len(),
             embedding_dimension: dim,
+            complete,
         };
         let json = serde_json::to_string_pretty(&manifest)
             .map_err(|e| format!("マニフェストシリアライズ失敗: {}", e))?;
@@ -307,6 +322,57 @@ impl VectorCache {
         }
         fingerprints
     }
+}
+
+/// フォルダ情報ファイル（index/{hash}/folder_info.json）の構造
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FolderInfo {
+    pub folder_path: String,
+}
+
+/// index/{hash}/folder_info.json にフォルダパスを保存する
+pub fn save_folder_info(index_hash_dir: &Path, folder_path: &str) {
+    let info = FolderInfo {
+        folder_path: folder_path.to_string(),
+    };
+    if let Ok(json) = serde_json::to_string(&info) {
+        let _ = std::fs::write(index_hash_dir.join("folder_info.json"), json);
+    }
+}
+
+/// index/{hash}/folder_info.json からフォルダパスを読み込む
+pub fn load_folder_info(index_hash_dir: &Path) -> Option<String> {
+    let path = index_hash_dir.join("folder_info.json");
+    let content = std::fs::read_to_string(path).ok()?;
+    let info: FolderInfo = serde_json::from_str(&content).ok()?;
+    Some(info.folder_path)
+}
+
+/// index/{hash}/vector/manifest.json からフォルダパスをフォールバック読み込みする
+fn load_folder_path_from_manifest(index_hash_dir: &Path) -> Option<String> {
+    let manifest_path = index_hash_dir.join("vector").join("manifest.json");
+    let content = std::fs::read_to_string(manifest_path).ok()?;
+    let manifest: CacheManifest = serde_json::from_str(&content).ok()?;
+    Some(manifest.folder_path)
+}
+
+/// ハッシュディレクトリからフォルダパスを復元する（folder_info.json 優先、manifest.json フォールバック）
+pub fn resolve_folder_path(index_hash_dir: &Path) -> Option<String> {
+    load_folder_info(index_hash_dir).or_else(|| load_folder_path_from_manifest(index_hash_dir))
+}
+
+/// ベクトルキャッシュが構築完了しているか判定する
+pub fn is_vector_complete(index_hash_dir: &Path) -> bool {
+    let manifest_path = index_hash_dir.join("vector").join("manifest.json");
+    let content = match std::fs::read_to_string(manifest_path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let manifest: CacheManifest = match serde_json::from_str(&content) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    manifest.complete
 }
 
 /// ベクトルキャッシュディレクトリの破損を検査する
@@ -586,12 +652,217 @@ mod tests {
             file_fingerprints: HashMap::new(),
             chunk_count: 0,
             embedding_dimension: 384,
+            complete: true,
         };
         let json = serde_json::to_string(&manifest).unwrap();
         std::fs::write(cache_dir.join("manifest.json"), json).unwrap();
         std::fs::write(cache_dir.join("embeddings.bin"), "invalid bin data").unwrap();
 
         assert!(!validate_cache_dir(&cache_dir));
+    }
+
+    #[test]
+    fn test_save_and_load_folder_info() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hash_dir = tmp.path().join("index").join("abc123");
+        std::fs::create_dir_all(&hash_dir).unwrap();
+
+        save_folder_info(&hash_dir, "/home/user/docs");
+        let loaded = load_folder_info(&hash_dir);
+        assert_eq!(loaded, Some("/home/user/docs".to_string()));
+    }
+
+    #[test]
+    fn test_load_folder_info_missing_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(load_folder_info(tmp.path()), None);
+    }
+
+    #[test]
+    fn test_resolve_folder_path_prefers_folder_info() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hash_dir = tmp.path();
+
+        // manifest.json にフォルダパスを書く
+        let vector_dir = hash_dir.join("vector");
+        std::fs::create_dir_all(&vector_dir).unwrap();
+        let manifest = CacheManifest {
+            format_version: FORMAT_VERSION,
+            folder_path: "/from/manifest".to_string(),
+            file_fingerprints: HashMap::new(),
+            chunk_count: 0,
+            embedding_dimension: 384,
+            complete: true,
+        };
+        std::fs::write(
+            vector_dir.join("manifest.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        // folder_info.json にフォルダパスを書く
+        save_folder_info(hash_dir, "/from/folder_info");
+
+        // folder_info.json が優先される
+        assert_eq!(
+            resolve_folder_path(hash_dir),
+            Some("/from/folder_info".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_folder_path_falls_back_to_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hash_dir = tmp.path();
+
+        let vector_dir = hash_dir.join("vector");
+        std::fs::create_dir_all(&vector_dir).unwrap();
+        let manifest = CacheManifest {
+            format_version: FORMAT_VERSION,
+            folder_path: "/from/manifest".to_string(),
+            file_fingerprints: HashMap::new(),
+            chunk_count: 0,
+            embedding_dimension: 384,
+            complete: true,
+        };
+        std::fs::write(
+            vector_dir.join("manifest.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_folder_path(hash_dir),
+            Some("/from/manifest".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_folder_path_none_when_no_info() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(resolve_folder_path(tmp.path()), None);
+    }
+
+    #[test]
+    fn test_is_vector_complete_true() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hash_dir = tmp.path();
+        let vector_dir = hash_dir.join("vector");
+        std::fs::create_dir_all(&vector_dir).unwrap();
+        let manifest = CacheManifest {
+            format_version: FORMAT_VERSION,
+            folder_path: "/test".to_string(),
+            file_fingerprints: HashMap::new(),
+            chunk_count: 10,
+            embedding_dimension: 384,
+            complete: true,
+        };
+        std::fs::write(
+            vector_dir.join("manifest.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+        assert!(is_vector_complete(hash_dir));
+    }
+
+    #[test]
+    fn test_is_vector_complete_false_when_partial() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hash_dir = tmp.path();
+        let vector_dir = hash_dir.join("vector");
+        std::fs::create_dir_all(&vector_dir).unwrap();
+        let manifest = CacheManifest {
+            format_version: FORMAT_VERSION,
+            folder_path: "/test".to_string(),
+            file_fingerprints: HashMap::new(),
+            chunk_count: 5,
+            embedding_dimension: 384,
+            complete: false,
+        };
+        std::fs::write(
+            vector_dir.join("manifest.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+        assert!(!is_vector_complete(hash_dir));
+    }
+
+    #[test]
+    fn test_is_vector_complete_false_when_no_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!is_vector_complete(tmp.path()));
+    }
+
+    #[test]
+    fn test_is_vector_complete_false_when_corrupt_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vector_dir = tmp.path().join("vector");
+        std::fs::create_dir_all(&vector_dir).unwrap();
+        std::fs::write(vector_dir.join("manifest.json"), "invalid json").unwrap();
+        assert!(!is_vector_complete(tmp.path()));
+    }
+
+    #[test]
+    fn test_is_vector_complete_false_when_legacy_manifest() {
+        // complete フィールドがない既存JSONは false として扱われる
+        let tmp = tempfile::tempdir().unwrap();
+        let vector_dir = tmp.path().join("vector");
+        std::fs::create_dir_all(&vector_dir).unwrap();
+        let json = r#"{"format_version":1,"folder_path":"/test","file_fingerprints":{},"chunk_count":10,"embedding_dimension":384}"#;
+        std::fs::write(vector_dir.join("manifest.json"), json).unwrap();
+        assert!(!is_vector_complete(tmp.path()));
+    }
+
+    #[test]
+    fn test_save_sets_complete_true() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = VectorCache::new(tmp.path());
+
+        let folder_dir = tempfile::tempdir().unwrap();
+        let test_file = folder_dir.path().join("test.md");
+        {
+            let mut f = std::fs::File::create(&test_file).unwrap();
+            writeln!(f, "test").unwrap();
+        }
+
+        let folder_path = folder_dir.path().to_str().unwrap();
+        let metas = vec![ChunkMeta {
+            chunk_id: 0,
+            source_path: test_file.to_string_lossy().to_string(),
+            chunk_index: 0,
+            text: "test".to_string(),
+        }];
+        let embeddings = vec![vec![0.1f32, 0.2, 0.3]];
+        cache.save(folder_path, &metas, &embeddings).unwrap();
+
+        let cache_dir = cache.cache_dir_for(folder_path);
+        let manifest_json = std::fs::read_to_string(cache_dir.join("manifest.json")).unwrap();
+        let manifest: CacheManifest = serde_json::from_str(&manifest_json).unwrap();
+        assert!(manifest.complete);
+    }
+
+    #[test]
+    fn test_save_partial_sets_complete_false() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = VectorCache::new(tmp.path());
+
+        let folder_path = "/test/folder";
+        let metas = vec![ChunkMeta {
+            chunk_id: 0,
+            source_path: "/test/file.md".to_string(),
+            chunk_index: 0,
+            text: "test".to_string(),
+        }];
+        let embeddings = vec![vec![0.1f32, 0.2, 0.3]];
+        let fingerprints = HashMap::new();
+        cache
+            .save_partial(folder_path, &metas, &embeddings, fingerprints)
+            .unwrap();
+
+        let cache_dir = cache.cache_dir_for(folder_path);
+        let manifest_json = std::fs::read_to_string(cache_dir.join("manifest.json")).unwrap();
+        let manifest: CacheManifest = serde_json::from_str(&manifest_json).unwrap();
+        assert!(!manifest.complete);
     }
 
     #[test]

@@ -133,3 +133,16 @@ export type StorageUsage = {
   disk_free_bytes: number;
   cache_limit_bytes: number;
 };
+
+/** インデックス済みフォルダ情報 */
+export type IndexedFolderInfo = {
+  folder_path: string;
+  has_fulltext: boolean;
+  vector_complete: boolean;
+};
+
+/** 既存インデックスのオープン結果 */
+export type OpenIndexedFolderResult = {
+  fulltext_count: number;
+  vector_chunk_count: number;
+};

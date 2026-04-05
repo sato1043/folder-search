@@ -138,3 +138,19 @@ export type IndexValidationResult = {
 export async function validateFolderIndexes(folderPath: string): Promise<IndexValidationResult> {
   return invoke<IndexValidationResult>("validate_folder_indexes", { folderPath });
 }
+
+export async function listIndexedFolders(): Promise<
+  import("../types").IndexedFolderInfo[]
+> {
+  return invoke<import("../types").IndexedFolderInfo[]>("list_indexed_folders");
+}
+
+export async function openIndexedFolder(
+  folderPath: string,
+): Promise<import("../types").OpenIndexedFolderResult> {
+  return invoke<import("../types").OpenIndexedFolderResult>("open_indexed_folder", { folderPath });
+}
+
+export async function deleteIndexedFolder(folderPath: string): Promise<void> {
+  return invoke<void>("delete_indexed_folder", { folderPath });
+}

@@ -5,6 +5,27 @@
 フォーマットは [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に準拠する。
 バージョニングは [Semantic Versioning](https://semver.org/lang/ja/) に従う。
 
+## [Unreleased]
+
+### Added
+
+- フォルダ選択ドロップダウン（FolderSelector）をSearchBar上に配置し、インデックス済みフォルダの即時切り替えに対応
+- 設定ダイアログにインデックス管理セクション追加（フォルダ一覧・状態バッジ・再構築・削除）
+- フォルダ情報の永続化（folder_info.json）によりインデックスからフォルダパスを復元可能に
+- CacheManifest に complete フラグ追加（ベクトルキャッシュの途中保存と完了を区別）
+- インデックス構築中・フォルダ読み込み中のオーバーレイ表示
+
+### Changed
+
+- モデルと設定の保存先を実行バイナリ隣の models/ から appDataDir 配下に統一
+- アプリ識別子を cc.updater.folder-search に変更
+
+### Fixed
+
+- ベクトルインデックス構築の中断時に embedding_model が失われるバグを修正
+- 同一フォルダの再インデックス時に tantivy ロックファイルが競合するバグを修正
+- インデックス構築中断時のダイアログ表示で全文検索件数が0と表示されるバグを修正
+
 ## [0.3.3] - 2026-04-04
 
 ### Added

@@ -168,6 +168,12 @@ pub async fn build_index(
         *watcher_guard = None;
     }
 
+    // 既存エンジンを解放（ファイル監視コールバックのIndexWriter完了を待つ）
+    {
+        let mut guard = state.engine.lock().map_err(|e| e.to_string())?;
+        *guard = None;
+    }
+
     // 重い処理をブロッキングスレッドで実行（WebViewスレッドを解放）
     let cancel_token = state.cancel_token.clone();
     let app_clone = app.clone();
@@ -201,6 +207,12 @@ pub async fn build_index(
     })
     .await
     .map_err(|e| format!("タスク実行失敗: {}", e))??;
+
+    // フォルダ情報を保存
+    let hash_dir = app_data_dir
+        .join("index")
+        .join(vector_cache::folder_hash(&folder_path));
+    vector_cache::save_folder_info(&hash_dir, &folder_path);
 
     {
         let mut guard = state.engine.lock().map_err(|e| e.to_string())?;
@@ -246,7 +258,7 @@ pub async fn build_index(
             }
 
             let cached = cache.load(&folder_path).ok()?;
-            let mut model_guard = state.embedding_model.lock().ok()?;
+            let mut model_guard = state.embedding_model.try_lock().ok()?;
             let generator = model_guard.as_mut()?;
 
             match build_vector_index_incremental_inner(
@@ -396,11 +408,15 @@ pub async fn build_vector_index(
                 return Ok(total);
             }
         }
+    } else {
     }
 
     // 重い処理をブロッキングスレッドで実行（WebViewスレッドを解放）
     let cancel_token = state.cancel_token.clone();
     let app_clone = app.clone();
+
+    // キャンセルトークンをリセット（前回の中断が残っている場合に備える）
+    state.cancel_token.store(false, Ordering::Relaxed);
 
     // embedding_model を一時的に取り出す
     let mut generator = {
@@ -410,26 +426,30 @@ pub async fn build_vector_index(
             .ok_or_else(|| "embeddingモデルがロードされていない".to_string())?
     };
 
-    let result = tokio::task::spawn_blocking(move || {
+    let (result, generator) = tokio::task::spawn_blocking(move || {
         let result = if let Some(ref d) = diff {
             if d.has_changes() {
                 if let Ok(cached) = cache.load(&folder_path) {
                     // 差分更新
-                    let (vector_index, total) = build_vector_index_incremental_inner(
+                    let build_result = build_vector_index_incremental_inner(
                         &cache,
                         &folder_path,
                         d,
                         cached,
                         &mut generator,
                         Some(&cancel_token),
-                    )?;
-
-                    let _ = app_clone.emit(
-                        "vector-index-progress",
-                        serde_json::json!({ "current": total, "total": total }),
                     );
 
-                    Ok((vector_index, total, generator))
+                    match build_result {
+                        Ok((vector_index, total)) => {
+                            let _ = app_clone.emit(
+                                "vector-index-progress",
+                                serde_json::json!({ "current": total, "total": total }),
+                            );
+                            Ok((vector_index, total))
+                        }
+                        Err(e) => Err(e),
+                    }
                 } else {
                     // キャッシュロード失敗 → フルビルド
                     build_vector_index_full_inner(
@@ -439,7 +459,6 @@ pub async fn build_vector_index(
                         &mut generator,
                         &cancel_token,
                     )
-                    .map(|(vi, total)| (vi, total, generator))
                 }
             } else {
                 // ここには来ない（差分なしは上で処理済み）
@@ -454,32 +473,30 @@ pub async fn build_vector_index(
                 &mut generator,
                 &cancel_token,
             )
-            .map(|(vi, total)| (vi, total, generator))
         };
 
-        result
+        // 成功・失敗に関わらず generator を返却する
+        (result, generator)
     })
     .await
     .map_err(|e| format!("タスク実行失敗: {}", e))?;
 
+
+    // embedding_model を常に返却
+    {
+        let mut model_guard = state.embedding_model.lock().map_err(|e| e.to_string())?;
+        *model_guard = Some(generator);
+    }
+
     match result {
-        Ok((vector_index, total, generator)) => {
-            // embedding_model を返却
-            {
-                let mut model_guard = state.embedding_model.lock().map_err(|e| e.to_string())?;
-                *model_guard = Some(generator);
-            }
+        Ok((vector_index, total)) => {
             {
                 let mut guard = state.vector_index.lock().map_err(|e| e.to_string())?;
                 *guard = Some(vector_index);
             }
             Ok(total)
         }
-        Err(e) => {
-            // エラー時もembedding_modelは失われている → ここでは復元できない
-            // （generatorはspawn_blocking内で消費済み）
-            Err(e)
-        }
+        Err(e) => Err(e),
     }
 }
 
@@ -647,7 +664,13 @@ fn build_vector_index_full_inner(
     let mut processed_files: HashSet<String> = HashSet::new();
     let mut current_file = String::new();
 
-    let progress_interval = std::cmp::max(total as usize / 100, 1);
+    let mut last_progress_time = std::time::Instant::now();
+
+    // 開始時に total を通知
+    let _ = app.emit(
+        "vector-index-progress",
+        serde_json::json!({ "current": 0, "total": total }),
+    );
 
     for (i, chunk) in all_chunks.iter().enumerate() {
         if cancel_token.load(Ordering::Relaxed) {
@@ -684,7 +707,8 @@ fn build_vector_index_full_inner(
         });
         all_embeddings.push(embedding);
 
-        if i % progress_interval == 0 {
+        if last_progress_time.elapsed() >= std::time::Duration::from_millis(200) {
+            last_progress_time = std::time::Instant::now();
             let _ = app.emit(
                 "vector-index-progress",
                 serde_json::json!({
@@ -742,7 +766,7 @@ fn save_partial_vector_cache(
     }
 
     let fingerprints = VectorCache::collect_fingerprints_for(processed_files);
-    if let Err(e) = cache.save_with_fingerprints(
+    if let Err(e) = cache.save_partial(
         folder_path,
         &partial_metas,
         &partial_embeddings,
@@ -1269,4 +1293,218 @@ pub fn validate_folder_indexes(
         fulltext_removed,
         vector_cache_removed,
     })
+}
+
+/// インデックス済みフォルダの情報
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct IndexedFolderInfo {
+    pub folder_path: String,
+    pub has_fulltext: bool,
+    pub vector_complete: bool,
+}
+
+/// インデックス済みフォルダの一覧を返す
+#[tauri::command]
+pub async fn list_indexed_folders(app: tauri::AppHandle) -> Result<Vec<IndexedFolderInfo>, String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let cache = VectorCache::new(&app_data_dir);
+
+    let mut folders = Vec::new();
+    for hash_dir in cache.list_index_dirs() {
+        if let Some(folder_path) = vector_cache::resolve_folder_path(&hash_dir) {
+            let has_fulltext = hash_dir.join("fulltext").exists();
+            let vector_complete = vector_cache::is_vector_complete(&hash_dir);
+            folders.push(IndexedFolderInfo {
+                folder_path,
+                has_fulltext,
+                vector_complete,
+            });
+        }
+    }
+
+    folders.sort_by(|a, b| a.folder_path.cmp(&b.folder_path));
+    Ok(folders)
+}
+
+/// 既存インデックスのオープン結果
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OpenIndexedFolderResult {
+    pub fulltext_count: u64,
+    pub vector_chunk_count: u64,
+}
+
+/// 既存インデックスを読み込む（再構築しない）
+#[tauri::command]
+pub async fn open_indexed_folder(
+    app: tauri::AppHandle,
+    folder_path: String,
+    state: State<'_, AppState>,
+) -> Result<OpenIndexedFolderResult, String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let hash = vector_cache::folder_hash(&folder_path);
+    let index_path = app_data_dir
+        .join("index")
+        .join(&hash)
+        .join("fulltext");
+
+    // 既存のウォッチャーを停止
+    {
+        let mut watcher_guard = state.watcher.lock().map_err(|e| e.to_string())?;
+        *watcher_guard = None;
+    }
+
+    // 全文検索エンジンを読み込む
+    let fulltext_count = if index_path.exists() {
+        let index_path_str = index_path.to_string_lossy().to_string();
+        let engine = TantivySearchEngine::new(&index_path_str)
+            .map_err(|e| format!("全文検索インデックス読み込み失敗: {}", e))?;
+        let count = engine.status().file_count;
+        let mut guard = state.engine.lock().map_err(|e| e.to_string())?;
+        *guard = Some(engine);
+        count
+    } else {
+        0
+    };
+
+    // ベクトルキャッシュを読み込む
+    let vector_chunk_count = {
+        let cache = VectorCache::new(&app_data_dir);
+        if let Ok(cached) = cache.load(&folder_path) {
+            let total = cached.metas.len() as u64;
+            let vector_index = HnswVectorIndex::from_cache(cached);
+            let mut guard = state.vector_index.lock().map_err(|e| e.to_string())?;
+            *guard = Some(vector_index);
+            total
+        } else {
+            0
+        }
+    };
+
+    // フォルダパスを更新
+    {
+        let mut fp = state.folder_path.lock().map_err(|e| e.to_string())?;
+        *fp = Some(folder_path.clone());
+    }
+
+    // ファイル監視を開始
+    let app_handle = app.app_handle().clone();
+    let watch_folder = folder_path.clone();
+    match FileWatcher::start(&watch_folder, move |changed_files| {
+        let state: tauri::State<'_, AppState> = app_handle.state();
+
+        let fulltext_count = {
+            let mut engine_guard = match state.engine.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            if let Some(engine) = engine_guard.as_mut() {
+                if let Err(e) = engine.update_files(&changed_files) {
+                    eprintln!("全文検索インデックス更新失敗: {}", e);
+                }
+                engine.status().file_count
+            } else {
+                return;
+            }
+        };
+
+        let vector_chunk_count = (|| -> Option<u64> {
+            let app_data_dir = app_handle.path().app_data_dir().ok()?;
+            let cache = VectorCache::new(&app_data_dir);
+            let folder_path = state.folder_path.lock().ok()?.clone()?;
+
+            let diff = cache.compute_diff(&folder_path)?;
+            if !diff.has_changes() {
+                return None;
+            }
+
+            let cached = cache.load(&folder_path).ok()?;
+            let mut model_guard = state.embedding_model.try_lock().ok()?;
+            let generator = model_guard.as_mut()?;
+
+            match build_vector_index_incremental_inner(
+                &cache,
+                &folder_path,
+                &diff,
+                cached,
+                generator,
+                None,
+            ) {
+                Ok((vector_index, total)) => {
+                    if let Ok(mut guard) = state.vector_index.lock() {
+                        *guard = Some(vector_index);
+                    }
+                    Some(total)
+                }
+                Err(e) => {
+                    eprintln!("ベクトルインデックス差分更新失敗: {}", e);
+                    None
+                }
+            }
+        })();
+
+        let _ = app_handle.emit(
+            "index-updated",
+            serde_json::json!({
+                "fulltext_count": fulltext_count,
+                "vector_chunk_count": vector_chunk_count.unwrap_or(0),
+            }),
+        );
+    }) {
+        Ok(watcher) => {
+            let mut watcher_guard = state.watcher.lock().map_err(|e| e.to_string())?;
+            *watcher_guard = Some(watcher);
+        }
+        Err(e) => {
+            eprintln!("ファイル監視開始失敗（無視）: {}", e);
+        }
+    }
+
+    Ok(OpenIndexedFolderResult {
+        fulltext_count,
+        vector_chunk_count,
+    })
+}
+
+/// インデックスを削除する
+#[tauri::command]
+pub async fn delete_indexed_folder(
+    app: tauri::AppHandle,
+    folder_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let hash = vector_cache::folder_hash(&folder_path);
+    let hash_dir = app_data_dir.join("index").join(&hash);
+
+    // 現在選択中のフォルダと同じ場合はエンジン・監視を解放
+    let is_current = {
+        let fp = state.folder_path.lock().map_err(|e| e.to_string())?;
+        fp.as_deref() == Some(&folder_path)
+    };
+
+    if is_current {
+        {
+            let mut watcher_guard = state.watcher.lock().map_err(|e| e.to_string())?;
+            *watcher_guard = None;
+        }
+        {
+            let mut guard = state.engine.lock().map_err(|e| e.to_string())?;
+            *guard = None;
+        }
+        {
+            let mut guard = state.vector_index.lock().map_err(|e| e.to_string())?;
+            *guard = None;
+        }
+        {
+            let mut fp = state.folder_path.lock().map_err(|e| e.to_string())?;
+            *fp = None;
+        }
+    }
+
+    if hash_dir.exists() {
+        std::fs::remove_dir_all(&hash_dir)
+            .map_err(|e| format!("インデックス削除失敗: {}", e))?;
+    }
+
+    Ok(())
 }

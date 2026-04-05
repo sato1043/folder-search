@@ -162,6 +162,9 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::validate_folder_indexes,
+            commands::list_indexed_folders,
+            commands::open_indexed_folder,
+            commands::delete_indexed_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

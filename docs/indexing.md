@@ -80,11 +80,13 @@ SearchResult { path, title, snippet, score }
 {appDataDir}/
 └── index/
     ├── {hash_A}/              ← フォルダAのインデックス
+    │   ├── folder_info.json   ← フォルダパスのメタデータ
     │   ├── fulltext/          ← 全文検索インデックス（tantivy形式）
     │   └── vector/            ← ベクトルキャッシュ
     │       ├── manifest.json  ← メタデータ（バージョン、フィンガープリント等）
     │       └── embeddings.bin ← embedding + チャンクメタ（bincode形式）
     └── {hash_B}/              ← フォルダBのインデックス
+        ├── folder_info.json
         ├── fulltext/
         └── vector/
 ```
@@ -168,6 +170,7 @@ pub struct CacheManifest {
     pub file_fingerprints: HashMap<String, FileFingerprint>,  // ファイルメタ
     pub chunk_count: usize,                             // チャンク総数
     pub embedding_dimension: usize,                     // 384
+    pub complete: bool,                                 // 構築完了フラグ（途中保存: false）
 }
 ```
 
@@ -190,7 +193,7 @@ pub struct CachedEmbeddings {
 
 ### 中断時の途中保存
 
-キャンセル検知時に `save_with_fingerprints()` で処理済みファイル分のみ保存する。次回の `compute_diff()` が未処理ファイルを `added` として検出し、差分更新パスで再開する。
+キャンセル検知時に `save_partial()` で処理済みファイル分のみ保存する（`complete: false`）。次回の `compute_diff()` が未処理ファイルを `added` として検出し、差分更新パスで再開する。フルビルド完了時は `save()` で `complete: true` を設定する。
 
 ## 5. ファイル監視による自動更新
 
