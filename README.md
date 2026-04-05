@@ -156,11 +156,36 @@ Tauri v2の2層構成（WebView + Rustネイティブレイヤー）を採用し
 
 WSLg上のGUIアプリではWindows側のIMEが利用できない（[microsoft/wslg#9](https://github.com/microsoft/wslg/issues/9)）。これはTauriやFolder Search固有の問題ではなく、WSLgプラットフォームの制限である。
 
-WSLgのWaylandコンポジターが外部IME（fcitx5等）の `input_method` バインドを拒否するため、Linux IMEによる回避も現時点では機能しない。
+WSLgのWaylandコンポジターが外部IME（fcitx5等）の `input_method` バインドを拒否するため、WSLg経由ではLinux IMEも機能しない。
 
-**ワークアラウンド**: Windows側で日本語テキストを入力し、クリップボード経由（Ctrl+V）で貼り付ける。
+**ワークアラウンド1（推奨）: サードパーティXサーバー経由でfcitx5を利用する**
 
-なお、Linux環境全般でTauri v2のIME変換ウィンドウが入力フィールドから離れて表示される問題が報告されている（[tauri-apps/tauri#11412](https://github.com/tauri-apps/tauri/issues/11412)）。上流の修正待ちの状態である。
+WSLgの代わりにMobaXterm・VcXsrv・X410等のXサーバーを使い、Linux側のfcitx5 + Mozcで日本語入力が可能になる。
+
+1. Windows側でXサーバーを起動する（MobaXterm等）
+2. WSL2側にfcitx5 + Mozcをインストールする
+   ```bash
+   sudo apt install fcitx5 fcitx5-mozc fcitx5-frontend-gtk3
+   ```
+3. 環境変数を設定する（`.zshrc`等）
+   ```bash
+   export DISPLAY=$(ip route show default | awk '{print $3}'):0
+   unset WAYLAND_DISPLAY
+   export GTK_IM_MODULE=fcitx
+   export QT_IM_MODULE=fcitx
+   export XMODIFIERS=@im=fcitx
+   ```
+4. fcitx5をWaylandプラグイン無効で起動する
+   ```bash
+   fcitx5 --disable=wayland -d
+   ```
+5. `Ctrl+Space` で日本語入力に切り替える
+
+なお、変換はインラインではなくfcitx5の小窓内で行われる。これはTauri v2（wry）がWebKitGTKのpreeditを無効化しているためであり、上流の制限である（[tauri-apps/tauri#11412](https://github.com/tauri-apps/tauri/issues/11412)）。
+
+**ワークアラウンド2: クリップボード貼り付け**
+
+Windows側で日本語テキストを入力し、クリップボード経由（Ctrl+V）で貼り付ける。
 
 ## ライセンス
 
