@@ -37,6 +37,10 @@ const defaultProps = {
   onDeleteModel: vi.fn(),
   onRegisterCustomModel: vi.fn(),
   onUnregisterCustomModel: vi.fn(),
+  indexedFolders: [],
+  currentFolder: null,
+  onRebuildIndex: vi.fn(),
+  onDeleteIndex: vi.fn(),
   onClose: vi.fn(),
 };
 
@@ -55,6 +59,7 @@ describe("SettingsDialog", () => {
     render(<SettingsDialog {...defaultProps} />);
     expect(await screen.findByText("一般")).toBeInTheDocument();
     expect(screen.getByText("モデル管理")).toBeInTheDocument();
+    expect(screen.getByText("インデックス管理")).toBeInTheDocument();
   });
 
   it("モデル管理セクションに切り替えられる", async () => {
