@@ -1021,7 +1021,10 @@ pub fn chat(
             match guard.as_ref() {
                 Some(engine) => engine
                     .search(&question, limits.fulltext_search_limit())
-                    .unwrap_or_default(),
+                    .unwrap_or_else(|e| {
+                        eprintln!("RAGの全文検索失敗（全文検索なしで続行）: {}", e);
+                        Vec::new()
+                    }),
                 None => Vec::new(),
             }
         };
