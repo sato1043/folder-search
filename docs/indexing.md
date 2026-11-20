@@ -17,7 +17,9 @@ tantivy インデックス検索
   ↓
 BM25 スコアによるランキング + スニペット生成
   ↓
-SearchResult { path, title, snippet, score }
+SearchResult { path, title, snippet, fragment, score }
+  snippet: 画面表示用（HTMLエスケープ・強調タグ付き）
+  fragment: 一致箇所の断片（本文の文字列そのまま。RAGで本文中の位置を探すために使い、IPCへは出さない）
 ```
 
 **実装**: `infra/tantivy/mod.rs` の `TantivySearchEngine`
@@ -39,7 +41,7 @@ SearchResult { path, title, snippet, score }
     → E5プレフィックス付与（"query: " + テキスト）
     → ONNX Runtime推論 → クエリembedding
     → HNSW近似最近傍検索（コサイン距離）
-    → VectorSearchResult { chunk_id, source_path, distance, text }
+    → VectorSearchResult { chunk_id, source_path, distance, text }（距離の昇順）
 ```
 
 **実装**:
@@ -63,12 +65,17 @@ SearchResult { path, title, snippet, score }
      reciprocal_rank_fusion(paths_A, paths_B, k=60)
            ↓
      RRF_score = Σ 1/(k + rank_i)
+       各リストで同じパスは初出だけを数え、rank_i は重複を除いた並びの順位
+       同点はパスの順に並べる
            ↓
      HybridSearchResult { path, title, snippet, score, source }
+       snippet: 全文検索のスニペット。なければチャンクテキストをHTMLエスケープしたもの
        source: "fulltext" | "vector" | "hybrid"
 ```
 
-**実装**: `domain/search/hybrid.rs` の `reciprocal_rank_fusion()`
+**実装**: `domain/search/hybrid.rs` の `reciprocal_rank_fusion()`・`display_snippet()`（k は同ファイルの `RRF_K` で、RAGと共有する）
+
+ベクトル検索の結果はチャンク単位のため、1つのファイルが paths_B に複数回現れる。重複をそのまま数えるとファイルのスコアが重ねて加算されるので、各リストで初出の1件だけを数える。
 
 ハイブリッド検索はデフォルトの検索モード。ベクトルインデックスが利用不可の場合は全文検索に自動フォールバックする。
 

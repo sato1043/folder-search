@@ -209,6 +209,35 @@ mod tests {
     }
 
     #[test]
+    fn test_search_returns_results_in_ascending_distance() {
+        // RAG は結果の並びを順位として使うので、近い順に並ぶことを固定する
+        let mut index = HnswVectorIndex::new();
+        let chunks: Vec<Chunk> = (0..20)
+            .map(|i| Chunk {
+                source_path: format!("/doc{}.md", i),
+                chunk_index: 0,
+                text: format!("ドキュメント{}", i),
+            })
+            .collect();
+        let embeddings: Vec<Embedding> = (0..20)
+            .map(|i| random_embedding(384, i as u64 * 100 + 1))
+            .collect();
+        index.add_batch(&chunks, &embeddings);
+
+        let results = index
+            .search_nearest(&random_embedding(384, 9999), 10)
+            .unwrap();
+
+        assert_eq!(results.len(), 10);
+        let distances: Vec<f32> = results.iter().map(|r| r.distance).collect();
+        assert!(
+            distances.windows(2).all(|w| w[0] <= w[1]),
+            "距離の昇順でない: {:?}",
+            distances
+        );
+    }
+
+    #[test]
     fn test_default_builds_searchable_index() {
         let mut index = HnswVectorIndex::default();
         assert!(index.is_empty());

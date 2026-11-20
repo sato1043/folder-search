@@ -10,9 +10,13 @@ use crate::domain::embedding::{EmbeddingGenerator, VectorSearcher};
 use crate::domain::indexer::chunker::split_into_chunks;
 use crate::domain::indexer::{IndexStatus, Indexer};
 use crate::domain::llm::chat_template::ChatTemplate;
-use crate::domain::llm::rag::{build_rag_prompt, extract_sources, ContextChunk, RagAnswer};
+use crate::domain::llm::rag::{
+    build_rag_prompt, extract_sources, select_context_chunks, ContextLimits, RagAnswer,
+};
 use crate::domain::llm::{DownloadedModelInfo, LlmInference, LlmModelInfo, StorageUsage};
-use crate::domain::search::hybrid::{reciprocal_rank_fusion, HybridSearchResult};
+use crate::domain::search::hybrid::{
+    display_snippet, reciprocal_rank_fusion, HybridSearchResult, RRF_K,
+};
 use crate::domain::search::{FulltextSearcher, SearchResult};
 use crate::domain::system::{recommend_models, ModelRecommendation, SystemInfo};
 use crate::infra::config::SettingsStore;
@@ -170,6 +174,12 @@ pub async fn build_index(
     // 既存エンジンを解放（ファイル監視コールバックのIndexWriter完了を待つ）
     {
         let mut guard = state.engine.lock().map_err(|e| e.to_string())?;
+        *guard = None;
+    }
+
+    // 前のフォルダのベクトルインデックスも解放する（続くベクトルインデックス構築が作り直す）
+    {
+        let mut guard = state.vector_index.lock().map_err(|e| e.to_string())?;
         *guard = None;
     }
 
@@ -814,7 +824,7 @@ pub fn hybrid_search(
         .iter()
         .map(|r| r.source_path.clone())
         .collect();
-    let ranked = reciprocal_rank_fusion(&fulltext_paths, &vector_paths, 60.0);
+    let ranked = reciprocal_rank_fusion(&fulltext_paths, &vector_paths, RRF_K);
 
     // 結果を構築（snippetは全文検索結果を優先、なければベクトル検索のチャンクテキスト）
     let results: Vec<HybridSearchResult> = ranked
@@ -834,9 +844,8 @@ pub fn hybrid_search(
                 })
                 .unwrap_or_default();
 
-            let snippet = ft
-                .map(|r| r.snippet.clone())
-                .unwrap_or_else(|| vr.map(|r| r.text.clone()).unwrap_or_default());
+            let snippet =
+                display_snippet(ft.map(|r| r.snippet.as_str()), vr.map(|r| r.text.as_str()));
 
             let source = match (ft.is_some(), vr.is_some()) {
                 (true, true) => "hybrid",
@@ -1011,11 +1020,18 @@ pub fn chat(
 ) -> Result<RagAnswer, String> {
     // ハイブリッド検索でコンテキストを取得
     let context_chunks = {
+        let limits = ContextLimits::default();
+
         // 全文検索
         let fulltext_results = {
             let guard = state.engine.lock().map_err(|e| e.to_string())?;
             match guard.as_ref() {
-                Some(engine) => engine.search(&question, 5).unwrap_or_default(),
+                Some(engine) => engine
+                    .search(&question, limits.fulltext_search_limit())
+                    .unwrap_or_else(|e| {
+                        eprintln!("RAGの全文検索失敗（全文検索なしで続行）: {}", e);
+                        Vec::new()
+                    }),
                 None => Vec::new(),
             }
         };
@@ -1032,34 +1048,23 @@ pub fn chat(
                         .generate(&query_with_prefix)
                         .map_err(|e| format!("embedding生成失敗: {}", e))?;
                     index
-                        .search_nearest(&query_embedding, 5)
+                        .search_nearest(&query_embedding, limits.vector_search_limit())
                         .unwrap_or_default()
                 }
                 _ => Vec::new(),
             }
         };
 
-        // RRFで統合してトップ5のファイルを取得
-        let fulltext_paths: Vec<String> = fulltext_results.iter().map(|r| r.path.clone()).collect();
-        let vector_paths: Vec<String> = vector_results
-            .iter()
-            .map(|r| r.source_path.clone())
-            .collect();
-        let ranked = reciprocal_rank_fusion(&fulltext_paths, &vector_paths, 60.0);
-
-        // コンテキストチャンクを構築
-        let mut chunks = Vec::new();
-        for (path, _) in ranked.iter().take(5) {
-            if let Ok(content) = std::fs::read_to_string(path) {
-                // ファイル内容を最大1000文字に切り詰め
-                let text: String = content.chars().take(1000).collect();
-                chunks.push(ContextChunk {
-                    path: path.clone(),
-                    text,
-                });
+        // RRFでファイルを順位付けし、当たった箇所からコンテキストを組み立てる
+        select_context_chunks(&fulltext_results, &vector_results, &limits, |path| {
+            match std::fs::read_to_string(path) {
+                Ok(content) => Some(content),
+                Err(e) => {
+                    eprintln!("RAGコンテキストから除外（読めない）: {}: {}", path, e);
+                    None
+                }
             }
-        }
-        chunks
+        })
     };
 
     // ロード済みモデルのテンプレートを取得（未設定時は ChatML）
@@ -1344,6 +1349,16 @@ pub async fn open_indexed_folder(
     {
         let mut watcher_guard = state.watcher.lock().map_err(|e| e.to_string())?;
         *watcher_guard = None;
+    }
+
+    // 前のフォルダの索引を解放する。読み込みが無い・失敗した経路でも前の索引を残さない
+    {
+        let mut guard = state.engine.lock().map_err(|e| e.to_string())?;
+        *guard = None;
+    }
+    {
+        let mut guard = state.vector_index.lock().map_err(|e| e.to_string())?;
+        *guard = None;
     }
 
     // 全文検索エンジンを読み込む

@@ -56,9 +56,15 @@ Tauri v2のアーキテクチャに従い、フロントエンド（WebView）�
 ```
 ユーザーの自然言語による質問
   ↓
-ハイブリッド検索（上記2.3）→ 上位5件のファイル
+ハイブリッド検索: 全文検索 上位5ファイル + ベクトル検索 上位20チャンク
   ↓
-コンテキスト構築（各ファイルの先頭1000文字）
+RRFでファイルを順位付け → 読めるファイルを上位から5つ（読めないファイルは除いて次の順位で補う）
+  ↓
+コンテキスト構築（今の本文から選ぶ。1ファイルあたり本文1000文字まで）:
+  ベクトル検索で当たったチャンクが今の本文に残る → 順位順に最大2つ（同じ本文のチャンクは1つと数える）
+    全文検索の一致箇所がどのチャンクにも無ければ、2つ目を一致箇所を中心とする500文字の窓に替える
+  残るチャンクが無い → 一致箇所を中心とする1000文字の窓（見つからなければ先頭1000文字）
+  選んだ部分はファイル内の順に並べる
   ↓
 プロンプト構築（ChatTemplate に応じた形式）:
   system メッセージ + コンテキスト + 質問 を組み立て
@@ -74,9 +80,12 @@ RagAnswer { answer, sources }
 
 **実装**:
 - チャットテンプレート: `domain/llm/chat_template.rs` の `ChatTemplate`（ChatML / Gemma / Llama3）
+- コンテキスト選定: `domain/llm/rag.rs` の `select_context_chunks()`（上限と検索件数は `ContextLimits`。本文は毎回ディスクから読み直し、インデックス作成後に消した・書き換えたファイルの古いチャンクを渡さない）
 - プロンプト構築: `domain/llm/rag.rs` の `build_rag_prompt()`（テンプレートを受け取り整形を委譲）
 - 参照元抽出: `domain/llm/rag.rs` の `extract_sources()`
 - LLM推論: `infra/llama/mod.rs` の `LlamaEngine`（`LlmInference` トレイト実装、context_length 可変）
+
+**既知のリスク**: 索引したフォルダの文書に仕込まれた指示（プロンプトインジェクション）は、本文としてそのままコンテキストに入り、回答や参照元の記載を誘導しうる。プロンプトでの防御は行っていない。
 
 ## 3. コンポーネント設計（実装済み）
 
@@ -383,15 +392,18 @@ LLMモデル取得・ロード（設定ダイアログ）
 
 ## 9. テスト構成
 
-### 9.1 テスト総数: 211件
+### 9.1 テスト総数: 280件（Rust 214件 + フロントエンド 66件）
+
+件数は `cargo test` と `vitest run --reporter=json` の結果から数える。
 
 | カテゴリ | ファイル | 件数 |
 |---|---|---|
-| tantivy全文検索 | `infra/tantivy/mod.rs` | 11 |
+| tantivy全文検索 | `infra/tantivy/mod.rs` | 15 |
+| 検索結果の型 | `domain/search/mod.rs` | 1 |
 | チャンク分割 | `domain/indexer/chunker.rs` | 5 |
-| RRFハイブリッド | `domain/search/hybrid.rs` | 5 |
-| HNSWベクトル検索 | `infra/hnsw/mod.rs` | 6 |
-| ベクトルキャッシュ | `infra/vector_cache/mod.rs` | 9 |
+| RRFハイブリッド | `domain/search/hybrid.rs` | 10 |
+| HNSWベクトル検索 | `infra/hnsw/mod.rs` | 9 |
+| ベクトルキャッシュ | `infra/vector_cache/mod.rs` | 28 |
 | システム情報検出 | `infra/system/mod.rs` | 3 |
 | モデル推奨ロジック | `domain/system/mod.rs` | 10 |
 | GPU推定ロジック | `domain/llm/mod.rs` | 33 |
@@ -399,19 +411,21 @@ LLMモデル取得・ロード（設定ダイアログ）
 | GPUフォールバック | `infra/llama/mod.rs` | 13 |
 | モデル管理 | `infra/model/mod.rs` | 22 |
 | モデルレジストリ | `infra/model_registry/mod.rs` | 13 |
-| RAGパイプライン | `domain/llm/rag.rs` | 8 |
+| RAGパイプライン | `domain/llm/rag.rs` | 28 |
 | アプリ設定(domain) | `domain/config/mod.rs` | 1 |
 | 設定永続化(infra) | `infra/config/mod.rs` | 7 |
 | Appコンポーネント | `src/App.test.tsx` | 1 |
-| Sidebar | `src/components/layout/Sidebar.test.tsx` | 2 |
+| Sidebar | `src/components/layout/Sidebar.test.tsx` | 1 |
 | MainPanel | `src/components/layout/MainPanel.test.tsx` | 2 |
-| SearchBar | `src/components/search/SearchBar.test.tsx` | 3 |
+| SearchBar | `src/components/search/SearchBar.test.tsx` | 4 |
+| FolderSelector | `src/components/search/FolderSelector.test.tsx` | 7 |
 | ResultList | `src/components/search/ResultList.test.tsx` | 4 |
 | Preview | `src/components/search/Preview.test.tsx` | 2 |
 | ChatMessage | `src/components/chat/ChatMessage.test.tsx` | 4 |
 | SettingsDialog | `src/components/settings/SettingsDialog.test.tsx` | 5 |
-| GeneralSection | `src/components/settings/GeneralSection.test.tsx` | 18 |
-| ModelManagement | `src/components/settings/ModelManagementSection.test.tsx` | 7 |
+| GeneralSection | `src/components/settings/GeneralSection.test.tsx` | 23 |
+| IndexManagement | `src/components/settings/IndexManagementSection.test.tsx` | 7 |
+| ModelManagement | `src/components/settings/ModelManagementSection.test.tsx` | 6 |
 
 ### 9.2 E2Eテスト
 

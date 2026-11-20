@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
@@ -17,9 +17,44 @@ pub struct HybridSearchResult {
     pub source: String,
 }
 
+/// 画面へ渡すスニペット（HTML）を選ぶ
+///
+/// 全文検索のスニペット（tantivy がエスケープ済みで強調タグを付けたHTML）を優先し、
+/// なければベクトル検索のチャンクテキストをHTMLエスケープして使う。
+/// 画面はスニペットをHTMLとして描画するので、文書に仕込んだマークアップを実行させないためである。
+pub fn display_snippet(fulltext_snippet: Option<&str>, chunk_text: Option<&str>) -> String {
+    match fulltext_snippet {
+        Some(snippet) => snippet.to_string(),
+        None => chunk_text.map(escape_html).unwrap_or_default(),
+    }
+}
+
+/// HTMLの特殊文字をエスケープする
+fn escape_html(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(c),
+        }
+    }
+    escaped
+}
+
+/// RRFの調整パラメータ（検索モードのハイブリッド検索とRAGで共有する）
+pub const RRF_K: f32 = 60.0;
+
 /// RRF（Reciprocal Rank Fusion）によるスコア統合
 ///
-/// `k` は調整パラメータ（一般的に60が使われる）
+/// `k` は調整パラメータ（通常は [`RRF_K`] を渡す）
+///
+/// 各リストで同じパスは初出の1件だけを数え、順位は重複を除いた並びで付ける。
+/// ベクトル検索の結果はチャンク単位で同じファイルが複数回現れるため、
+/// そのまま数えるとファイルのスコアが重ねて加算される。
 pub fn reciprocal_rank_fusion(
     fulltext_paths: &[String],
     vector_paths: &[String],
@@ -27,16 +62,21 @@ pub fn reciprocal_rank_fusion(
 ) -> Vec<(String, f32)> {
     let mut scores: HashMap<String, f32> = HashMap::new();
 
-    for (rank, path) in fulltext_paths.iter().enumerate() {
-        *scores.entry(path.clone()).or_insert(0.0) += 1.0 / (k + rank as f32 + 1.0);
+    for list in [fulltext_paths, vector_paths] {
+        let mut seen: HashSet<&str> = HashSet::new();
+        let unique_paths = list.iter().filter(|path| seen.insert(path.as_str()));
+        for (rank, path) in unique_paths.enumerate() {
+            *scores.entry(path.clone()).or_insert(0.0) += 1.0 / (k + rank as f32 + 1.0);
+        }
     }
 
-    for (rank, path) in vector_paths.iter().enumerate() {
-        *scores.entry(path.clone()).or_insert(0.0) += 1.0 / (k + rank as f32 + 1.0);
-    }
-
+    // 同点はパスの順に並べ、順位を実行ごとに変えない
     let mut ranked: Vec<(String, f32)> = scores.into_iter().collect();
-    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
     ranked
 }
 
@@ -56,6 +96,50 @@ mod tests {
         let top_paths: Vec<&str> = results.iter().take(2).map(|(p, _)| p.as_str()).collect();
         assert!(top_paths.contains(&"a.md"), "aは上位に来る");
         assert!(top_paths.contains(&"b.md"), "bは上位に来る");
+    }
+
+    #[test]
+    fn test_display_snippet_prefers_fulltext_snippet() {
+        let snippet = display_snippet(Some("<b>Rust</b>の資料"), Some("チャンク"));
+        assert_eq!(snippet, "<b>Rust</b>の資料");
+    }
+
+    #[test]
+    fn test_display_snippet_falls_back_to_chunk_text() {
+        assert_eq!(display_snippet(None, Some("チャンク")), "チャンク");
+        assert_eq!(display_snippet(None, None), "");
+    }
+
+    #[test]
+    fn test_display_snippet_escapes_chunk_text() {
+        // 画面は snippet を HTML として描画するので、生のチャンクテキストに含まれる
+        // マークアップを実行させない
+        let snippet = display_snippet(None, Some(r#"<img src=x onerror="alert(1)"> & 'R&D'"#));
+        assert_eq!(
+            snippet,
+            "&lt;img src=x onerror=&quot;alert(1)&quot;&gt; &amp; &#39;R&amp;D&#39;"
+        );
+    }
+
+    #[test]
+    fn test_rrf_orders_tied_scores_by_path() {
+        // 各順位で全文とベクトルの1件ずつが同点になる。同点はパスの順に並ぶ
+        let fulltext: Vec<String> = ["h.md", "f.md", "d.md", "b.md"]
+            .iter()
+            .map(|p| p.to_string())
+            .collect();
+        let vector: Vec<String> = ["g.md", "e.md", "c.md", "a.md"]
+            .iter()
+            .map(|p| p.to_string())
+            .collect();
+
+        let results = reciprocal_rank_fusion(&fulltext, &vector, 60.0);
+
+        let paths: Vec<&str> = results.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["g.md", "h.md", "e.md", "f.md", "c.md", "d.md", "a.md", "b.md"]
+        );
     }
 
     #[test]
@@ -97,5 +181,30 @@ mod tests {
         let fulltext = vec!["a.md".to_string(), "b.md".to_string()];
         let results = reciprocal_rank_fusion(&fulltext, &[], 60.0);
         assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_rrf_counts_duplicate_path_once_per_list() {
+        // ベクトル検索はチャンク単位なので、同じファイルが複数回現れる
+        let vector = vec![
+            "a.md".to_string(),
+            "a.md".to_string(),
+            "b.md".to_string(),
+            "a.md".to_string(),
+        ];
+
+        let results = reciprocal_rank_fusion(&[], &vector, 60.0);
+        let score_of = |path: &str| {
+            results
+                .iter()
+                .find(|(p, _)| p == path)
+                .map(|(_, s)| *s)
+                .unwrap()
+        };
+
+        // a.md は初出の1位だけ、b.md は重複を除いた順位の2位で数える
+        assert_eq!(results.len(), 2);
+        assert!((score_of("a.md") - 1.0 / 61.0).abs() < 1e-6);
+        assert!((score_of("b.md") - 1.0 / 62.0).abs() < 1e-6);
     }
 }

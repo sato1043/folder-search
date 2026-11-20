@@ -30,7 +30,7 @@
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` が通る
 - [ ] `pnpm lint` でエラーがない
 - [ ] `CHANGELOG.md` にリリース内容を記載した
-- [ ] develop ブランチの内容が main にマージ済み
+- [ ] リリースに含める作業ブランチ（`task/*`）がすべて main にマージ済み
 
 ## 手順
 

@@ -13,6 +13,8 @@ pub trait EmbeddingGenerator {
 /// ベクトル検索のトレイト
 pub trait VectorSearcher {
     /// クエリベクトルに最も近いチャンクを検索する
+    ///
+    /// 結果は距離の昇順（近い順）に並べて返す。
     fn search_nearest(
         &self,
         query_embedding: &Embedding,
@@ -23,7 +25,7 @@ pub trait VectorSearcher {
 /// ベクトル検索結果
 #[derive(Debug, Clone)]
 pub struct VectorSearchResult {
-    /// チャンクの識別子（source_path + chunk_index）
+    /// インデックス内でのチャンクの通し番号（0始まり）
     pub chunk_id: usize,
     /// 元ファイルのパス
     pub source_path: String,
