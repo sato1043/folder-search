@@ -10,7 +10,9 @@ use crate::domain::embedding::{EmbeddingGenerator, VectorSearcher};
 use crate::domain::indexer::chunker::split_into_chunks;
 use crate::domain::indexer::{IndexStatus, Indexer};
 use crate::domain::llm::chat_template::ChatTemplate;
-use crate::domain::llm::rag::{build_rag_prompt, extract_sources, ContextChunk, RagAnswer};
+use crate::domain::llm::rag::{
+    build_rag_prompt, extract_sources, select_context_chunks, ContextLimits, RagAnswer,
+};
 use crate::domain::llm::{DownloadedModelInfo, LlmInference, LlmModelInfo, StorageUsage};
 use crate::domain::search::hybrid::{reciprocal_rank_fusion, HybridSearchResult};
 use crate::domain::search::{FulltextSearcher, SearchResult};
@@ -1002,6 +1004,9 @@ pub fn get_loaded_model_filename(state: State<'_, AppState>) -> Option<String> {
         .and_then(|g| g.as_ref().map(|c| c.filename.clone()))
 }
 
+/// RAGでベクトル検索から引くチャンクの件数
+const RAG_VECTOR_SEARCH_LIMIT: usize = 20;
+
 /// RAG質問応答（ストリーミング）
 #[tauri::command]
 pub fn chat(
@@ -1031,35 +1036,23 @@ pub fn chat(
                     let query_embedding = generator
                         .generate(&query_with_prefix)
                         .map_err(|e| format!("embedding生成失敗: {}", e))?;
+                    // チャンク単位の結果なので、上位5ファイルを1ファイル2チャンクまで
+                    // 埋められる件数を引く
                     index
-                        .search_nearest(&query_embedding, 5)
+                        .search_nearest(&query_embedding, RAG_VECTOR_SEARCH_LIMIT)
                         .unwrap_or_default()
                 }
                 _ => Vec::new(),
             }
         };
 
-        // RRFで統合してトップ5のファイルを取得
-        let fulltext_paths: Vec<String> = fulltext_results.iter().map(|r| r.path.clone()).collect();
-        let vector_paths: Vec<String> = vector_results
-            .iter()
-            .map(|r| r.source_path.clone())
-            .collect();
-        let ranked = reciprocal_rank_fusion(&fulltext_paths, &vector_paths, 60.0);
-
-        // コンテキストチャンクを構築
-        let mut chunks = Vec::new();
-        for (path, _) in ranked.iter().take(5) {
-            if let Ok(content) = std::fs::read_to_string(path) {
-                // ファイル内容を最大1000文字に切り詰め
-                let text: String = content.chars().take(1000).collect();
-                chunks.push(ContextChunk {
-                    path: path.clone(),
-                    text,
-                });
-            }
-        }
-        chunks
+        // RRFでファイルを順位付けし、当たった箇所からコンテキストを組み立てる
+        select_context_chunks(
+            &fulltext_results,
+            &vector_results,
+            &ContextLimits::default(),
+            |path| std::fs::read_to_string(path).ok(),
+        )
     };
 
     // ロード済みモデルのテンプレートを取得（未設定時は ChatML）
