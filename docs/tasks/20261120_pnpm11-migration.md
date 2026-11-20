@@ -212,6 +212,10 @@ git diff --numstat -- pnpm-lock.yaml
   esbuild の動作は 2 版とも `transformSync` で確かめた
 - `pnpm/action-setup@v4` で pnpm 11 が入ることは、action のソースで `packageManager` を
   読む分岐を確かめただけで、CI 上では動かしていない
+- 2026-11-20 追記: Rust 側の健全性も確かめた（本変更は Rust に触れない）。LLVM と CMake を
+  入れた後、`cargo test` は 185 件合格・失敗 0・ignored 0（ユーザーが実行）。
+  `cargo clippy -- -W clippy::all` は exit 0・error 0・warning 5 件で、いずれも既存の
+  コード（`commands/mod.rs` 3 件・`infra/hnsw/mod.rs` 1 件・`infra/llama/mod.rs` 1 件）
 
 ## 機能への反映
 
