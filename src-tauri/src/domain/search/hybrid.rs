@@ -63,6 +63,27 @@ mod tests {
     }
 
     #[test]
+    fn test_rrf_orders_tied_scores_by_path() {
+        // 各順位で全文とベクトルの1件ずつが同点になる。同点はパスの順に並ぶ
+        let fulltext: Vec<String> = ["h.md", "f.md", "d.md", "b.md"]
+            .iter()
+            .map(|p| p.to_string())
+            .collect();
+        let vector: Vec<String> = ["g.md", "e.md", "c.md", "a.md"]
+            .iter()
+            .map(|p| p.to_string())
+            .collect();
+
+        let results = reciprocal_rank_fusion(&fulltext, &vector, 60.0);
+
+        let paths: Vec<&str> = results.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["g.md", "h.md", "e.md", "f.md", "c.md", "d.md", "a.md", "b.md"]
+        );
+    }
+
+    #[test]
     fn test_rrf_same_rank_higher_score() {
         let fulltext = vec!["a.md".to_string()];
         let vector = vec!["a.md".to_string()];
