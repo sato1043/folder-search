@@ -17,14 +17,32 @@ pub struct HybridSearchResult {
     pub source: String,
 }
 
-/// 画面へ渡すスニペットを選ぶ
+/// 画面へ渡すスニペット（HTML）を選ぶ
 ///
-/// 全文検索のスニペットを優先し、なければベクトル検索のチャンクテキストを使う。
+/// 全文検索のスニペット（tantivy がエスケープ済みで強調タグを付けたHTML）を優先し、
+/// なければベクトル検索のチャンクテキストをHTMLエスケープして使う。
+/// 画面はスニペットをHTMLとして描画するので、文書に仕込んだマークアップを実行させないためである。
 pub fn display_snippet(fulltext_snippet: Option<&str>, chunk_text: Option<&str>) -> String {
-    fulltext_snippet
-        .or(chunk_text)
-        .map(str::to_string)
-        .unwrap_or_default()
+    match fulltext_snippet {
+        Some(snippet) => snippet.to_string(),
+        None => chunk_text.map(escape_html).unwrap_or_default(),
+    }
+}
+
+/// HTMLの特殊文字をエスケープする
+fn escape_html(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(c),
+        }
+    }
+    escaped
 }
 
 /// RRFの調整パラメータ（検索モードのハイブリッド検索とRAGで共有する）
