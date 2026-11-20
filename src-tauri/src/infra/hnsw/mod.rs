@@ -131,7 +131,6 @@ impl VectorSearcher for HnswVectorIndex {
                 self.metas.get(id).map(|meta| VectorSearchResult {
                     chunk_id: meta.chunk_id,
                     source_path: meta.source_path.clone(),
-                    chunk_index: meta.chunk_index,
                     distance: n.distance,
                     text: meta.text.clone(),
                 })
@@ -181,22 +180,6 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].source_path, "/test.md");
         assert_eq!(results[0].text, "テストチャンク");
-    }
-
-    #[test]
-    fn test_search_returns_chunk_index() {
-        let mut index = HnswVectorIndex::new();
-
-        let chunk = Chunk {
-            source_path: "/test.md".to_string(),
-            chunk_index: 3,
-            text: "4番目のチャンク".to_string(),
-        };
-        let embedding = random_embedding(384, 7);
-        index.add(&chunk, &embedding);
-
-        let results = index.search_nearest(&embedding, 1).unwrap();
-        assert_eq!(results[0].chunk_index, 3);
     }
 
     #[test]

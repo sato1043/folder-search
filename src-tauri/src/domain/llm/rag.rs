@@ -331,11 +331,10 @@ mod tests {
         }
     }
 
-    fn vector_hit(path: &str, chunk_index: usize, text: &str) -> VectorSearchResult {
+    fn vector_hit(path: &str, chunk_id: usize, text: &str) -> VectorSearchResult {
         VectorSearchResult {
-            chunk_id: chunk_index,
+            chunk_id,
             source_path: path.to_string(),
-            chunk_index,
             distance: 0.1,
             text: text.to_string(),
         }

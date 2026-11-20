@@ -27,8 +27,6 @@ pub struct VectorSearchResult {
     pub chunk_id: usize,
     /// 元ファイルのパス
     pub source_path: String,
-    /// ファイル内でのチャンクの順番（0始まり）
-    pub chunk_index: usize,
     /// 距離（小さいほど類似）
     pub distance: f32,
     /// チャンクテキスト
