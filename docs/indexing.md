@@ -41,7 +41,7 @@ SearchResult { path, title, snippet, fragment, score }
     → E5プレフィックス付与（"query: " + テキスト）
     → ONNX Runtime推論 → クエリembedding
     → HNSW近似最近傍検索（コサイン距離）
-    → VectorSearchResult { chunk_id, source_path, chunk_index, distance, text }
+    → VectorSearchResult { chunk_id, source_path, distance, text }（距離の昇順）
 ```
 
 **実装**:
@@ -66,12 +66,14 @@ SearchResult { path, title, snippet, fragment, score }
            ↓
      RRF_score = Σ 1/(k + rank_i)
        各リストで同じパスは初出だけを数え、rank_i は重複を除いた並びの順位
+       同点はパスの順に並べる
            ↓
      HybridSearchResult { path, title, snippet, score, source }
+       snippet: 全文検索のスニペット。なければチャンクテキストをHTMLエスケープしたもの
        source: "fulltext" | "vector" | "hybrid"
 ```
 
-**実装**: `domain/search/hybrid.rs` の `reciprocal_rank_fusion()`
+**実装**: `domain/search/hybrid.rs` の `reciprocal_rank_fusion()`・`display_snippet()`（k は同ファイルの `RRF_K` で、RAGと共有する）
 
 ベクトル検索の結果はチャンク単位のため、1つのファイルが paths_B に複数回現れる。重複をそのまま数えるとファイルのスコアが重ねて加算されるので、各リストで初出の1件だけを数える。
 
