@@ -44,9 +44,9 @@ NOTE: このプロジェクトの 99% が Claude Code により実装されて�
 
 ### 開発時
 
-- Node.js >= 20
+- Node.js >= 22
 - Rust >= 1.77
-- pnpm
+- pnpm 11（`package.json` の `packageManager` で版を固定。別の版で実行すると固定版へ自動で切り替わる）
 - CMake（llama.cppのビルドに必要）
 - libclang-dev（llama.cppのbindgenに必要）
 
