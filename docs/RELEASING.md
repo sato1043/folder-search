@@ -59,11 +59,18 @@
 # tauri.conf.json:    "version": "0.2.0"
 ```
 
+`src-tauri/Cargo.lock` も `Cargo.toml` の版へ追随させる。次のコマンドはワークスペースの
+パッケージ（`folder-search`）だけを更新し、依存クレートは動かさない。
+
+```bash
+cargo update --workspace --manifest-path src-tauri/Cargo.toml
+```
+
 ### 3. コミット・タグ作成・プッシュ
 
 ```bash
 # バージョン更新をコミット
-git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json CHANGELOG.md
+git add package.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json CHANGELOG.md
 git commit -m "chore: release v0.2.0"
 
 # タグを作成

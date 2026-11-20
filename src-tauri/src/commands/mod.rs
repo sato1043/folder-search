@@ -31,7 +31,6 @@ use tauri::Manager;
 pub struct LoadedLlmConfig {
     pub filename: String,
     pub chat_template: ChatTemplate,
-    pub context_length: u32,
 }
 
 /// インデックス検証の共有状態
@@ -408,7 +407,6 @@ pub async fn build_vector_index(
                 return Ok(total);
             }
         }
-    } else {
     }
 
     // 重い処理をブロッキングスレッドで実行（WebViewスレッドを解放）
@@ -481,7 +479,6 @@ pub async fn build_vector_index(
     .await
     .map_err(|e| format!("タスク実行失敗: {}", e))?;
 
-
     // embedding_model を常に返却
     {
         let mut model_guard = state.embedding_model.lock().map_err(|e| e.to_string())?;
@@ -523,7 +520,7 @@ fn build_vector_index_incremental_inner(
     let mut all_metas = Vec::new();
     let mut all_embeddings = Vec::new();
 
-    for (meta, embedding) in cached.metas.into_iter().zip(cached.embeddings.into_iter()) {
+    for (meta, embedding) in cached.metas.into_iter().zip(cached.embeddings) {
         if !changed_files.contains(meta.source_path.as_str()) {
             all_metas.push(meta);
             all_embeddings.push(embedding);
@@ -976,7 +973,6 @@ pub async fn load_llm_model(
         *config_guard = Some(LoadedLlmConfig {
             filename: filename.clone(),
             chat_template: template,
-            context_length,
         });
     }
 
@@ -1244,10 +1240,7 @@ pub fn validate_folder_indexes(
         {
             let mut current = validation.current_hash.lock().map_err(|e| e.to_string())?;
             while current.as_deref() == Some(&hash) {
-                current = validation
-                    .notify
-                    .wait(current)
-                    .map_err(|e| e.to_string())?;
+                current = validation.notify.wait(current).map_err(|e| e.to_string())?;
             }
         }
 
@@ -1277,7 +1270,10 @@ pub fn validate_folder_indexes(
 
     // 全文検索インデックスの検証
     if !tantivy_infra::validate_index(&fulltext_path) {
-        eprintln!("全文検索インデックスの破損を検出、削除: {:?}", fulltext_path);
+        eprintln!(
+            "全文検索インデックスの破損を検出、削除: {:?}",
+            fulltext_path
+        );
         let _ = std::fs::remove_dir_all(&fulltext_path);
         fulltext_removed = true;
     }
@@ -1342,10 +1338,7 @@ pub async fn open_indexed_folder(
 ) -> Result<OpenIndexedFolderResult, String> {
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let hash = vector_cache::folder_hash(&folder_path);
-    let index_path = app_data_dir
-        .join("index")
-        .join(&hash)
-        .join("fulltext");
+    let index_path = app_data_dir.join("index").join(&hash).join("fulltext");
 
     // 既存のウォッチャーを停止
     {
@@ -1502,8 +1495,7 @@ pub async fn delete_indexed_folder(
     }
 
     if hash_dir.exists() {
-        std::fs::remove_dir_all(&hash_dir)
-            .map_err(|e| format!("インデックス削除失敗: {}", e))?;
+        std::fs::remove_dir_all(&hash_dir).map_err(|e| format!("インデックス削除失敗: {}", e))?;
     }
 
     Ok(())

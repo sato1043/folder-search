@@ -83,8 +83,7 @@ pub fn run() {
 
                         // 全文検索インデックスの検証
                         let fulltext_path = hash_dir.join("fulltext");
-                        if fulltext_path.exists()
-                            && !tantivy_infra::validate_index(&fulltext_path)
+                        if fulltext_path.exists() && !tantivy_infra::validate_index(&fulltext_path)
                         {
                             eprintln!(
                                 "BG検証: 全文検索インデックスの破損を検出、削除: {:?}",
@@ -95,9 +94,7 @@ pub fn run() {
 
                         // ベクトルキャッシュの検証
                         let vector_path = hash_dir.join("vector");
-                        if vector_path.exists()
-                            && !vector_cache::validate_cache_dir(&vector_path)
-                        {
+                        if vector_path.exists() && !vector_cache::validate_cache_dir(&vector_path) {
                             eprintln!(
                                 "BG検証: ベクトルキャッシュの破損を検出、削除: {:?}",
                                 vector_path

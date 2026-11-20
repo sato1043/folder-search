@@ -137,7 +137,7 @@ impl LlmInference for LlamaEngine {
         // バッチにトークンを投入
         let mut batch = LlamaBatch::new(self.context_length as usize, 1);
         let last_idx = (tokens.len() - 1) as i32;
-        for (i, token) in (0_i32..).zip(tokens.into_iter()) {
+        for (i, token) in (0_i32..).zip(tokens) {
             batch
                 .add(token, i, &[0], i == last_idx)
                 .map_err(|e| LlmError::InferenceError(e.to_string()))?;

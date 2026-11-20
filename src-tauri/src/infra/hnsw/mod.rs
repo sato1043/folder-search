@@ -105,6 +105,12 @@ impl HnswVectorIndex {
     }
 }
 
+impl Default for HnswVectorIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VectorSearcher for HnswVectorIndex {
     fn search_nearest(
         &self,
@@ -200,6 +206,23 @@ mod tests {
         assert!(!results.is_empty());
         // 最近傍は自分自身のはず
         assert_eq!(results[0].source_path, "/doc3.md");
+    }
+
+    #[test]
+    fn test_default_builds_searchable_index() {
+        let mut index = HnswVectorIndex::default();
+        assert!(index.is_empty());
+
+        let chunk = Chunk {
+            source_path: "/default.md".to_string(),
+            chunk_index: 0,
+            text: "既定値で作ったインデックス".to_string(),
+        };
+        let embedding = random_embedding(384, 7);
+        index.add(&chunk, &embedding);
+
+        let results = index.search_nearest(&embedding, 1).unwrap();
+        assert_eq!(results[0].source_path, "/default.md");
     }
 
     #[test]

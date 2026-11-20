@@ -73,9 +73,7 @@ impl VectorCache {
 
     /// フォルダパスからキャッシュディレクトリを算出する
     pub fn cache_dir_for(&self, folder_path: &str) -> PathBuf {
-        self.base_dir
-            .join(folder_hash(folder_path))
-            .join("vector")
+        self.base_dir.join(folder_hash(folder_path)).join("vector")
     }
 
     /// フォルダ内の対象ファイルのフィンガープリントを収集する
