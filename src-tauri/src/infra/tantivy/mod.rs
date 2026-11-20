@@ -413,6 +413,7 @@ impl FulltextSearcher for TantivySearchEngine {
                 path,
                 title,
                 snippet: snippet_text,
+                fragment: snippet.fragment().to_string(),
                 score,
             });
         }
@@ -493,6 +494,28 @@ mod tests {
         assert_eq!(results[0].title, "検索エンジン.md");
         assert!(results[0].path.contains("検索エンジン"));
         assert!(results[0].score > 0.0);
+    }
+
+    #[test]
+    fn test_search_fragment_is_plain_text() {
+        let mut engine = TantivySearchEngine::new_in_ram().unwrap();
+        engine
+            .add_document(&Document {
+                path: "/test/記号.md".to_string(),
+                title: "記号.md".to_string(),
+                body: "R&D部門では<script>タグを含むtantivyの資料を管理します。".to_string(),
+            })
+            .unwrap();
+
+        let results = engine.search("tantivy", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        // fragment は本文の文字列そのまま（HTMLエスケープしない）で、本文の中に見つかる
+        let fragment = &results[0].fragment;
+        assert!(fragment.contains("tantivy"));
+        assert!(fragment.contains("R&D"));
+        assert!(!fragment.contains("&amp;"));
+        // 画面用の snippet は従来どおりエスケープ済み
+        assert!(results[0].snippet.contains("&amp;"));
     }
 
     #[test]
