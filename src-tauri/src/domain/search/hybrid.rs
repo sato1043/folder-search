@@ -98,4 +98,29 @@ mod tests {
         let results = reciprocal_rank_fusion(&fulltext, &[], 60.0);
         assert_eq!(results.len(), 2);
     }
+
+    #[test]
+    fn test_rrf_counts_duplicate_path_once_per_list() {
+        // ベクトル検索はチャンク単位なので、同じファイルが複数回現れる
+        let vector = vec![
+            "a.md".to_string(),
+            "a.md".to_string(),
+            "b.md".to_string(),
+            "a.md".to_string(),
+        ];
+
+        let results = reciprocal_rank_fusion(&[], &vector, 60.0);
+        let score_of = |path: &str| {
+            results
+                .iter()
+                .find(|(p, _)| p == path)
+                .map(|(_, s)| *s)
+                .unwrap()
+        };
+
+        // a.md は初出の1位だけ、b.md は重複を除いた順位の2位で数える
+        assert_eq!(results.len(), 2);
+        assert!((score_of("a.md") - 1.0 / 61.0).abs() < 1e-6);
+        assert!((score_of("b.md") - 1.0 / 62.0).abs() < 1e-6);
+    }
 }
