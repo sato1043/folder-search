@@ -434,6 +434,25 @@ mod tests {
     }
 
     #[test]
+    fn test_context_does_not_repeat_identical_chunk_text() {
+        // 同じ定型文のチャンクが2つ当たっても、同じ本文を二度載せず次のチャンクで埋める
+        let vector = vec![
+            vector_hit("/a.md", 0, "定型の注意書き"),
+            vector_hit("/a.md", 4, "定型の注意書き"),
+            vector_hit("/a.md", 2, "固有の段落"),
+        ];
+
+        let chunks = select_context_chunks(&[], &vector, &ContextLimits::default(), |_| {
+            Some("定型の注意書き。固有の段落。定型の注意書き。".to_string())
+        });
+
+        assert_eq!(
+            chunks[0].text,
+            format!("定型の注意書き{}固有の段落", CHUNK_SEPARATOR)
+        );
+    }
+
+    #[test]
     fn test_context_takes_top_two_chunks_in_file_order() {
         // 順位順に 5, 1, 3。上位2つ（5と1）をファイル内の順（1, 5）に並べる
         let vector = vec![
