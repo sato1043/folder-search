@@ -315,10 +315,6 @@ mod tests {
         }
     }
 
-    fn no_file(_: &str) -> Option<String> {
-        None
-    }
-
     fn body_chars(chunk: &ContextChunk) -> usize {
         chunk.text.replace(CHUNK_SEPARATOR, "").chars().count()
     }
@@ -326,11 +322,11 @@ mod tests {
     #[test]
     fn test_context_uses_vector_chunk_text_beyond_file_head() {
         // 答えはファイルの後半（7番目のチャンク）にだけある
-        let head = "前置き".repeat(1000);
+        let content = format!("{}料理店の名前は山猫軒である", "前置き".repeat(1000));
         let vector = vec![vector_hit("/a.md", 6, "料理店の名前は山猫軒である")];
 
         let chunks = select_context_chunks(&[], &vector, &ContextLimits::default(), |_| {
-            Some(head.clone())
+            Some(content.clone())
         });
 
         assert_eq!(chunks.len(), 1);
@@ -340,12 +336,50 @@ mod tests {
     }
 
     #[test]
-    fn test_context_vector_chunks_do_not_read_file() {
-        let vector = vec![vector_hit("/a.md", 0, "本文")];
+    fn test_context_skips_deleted_vector_hit_file() {
+        // インデックス作成後に消えたファイルは、ベクトル検索で当たっても載せない
+        let vector = vec![
+            vector_hit("/gone.md", 0, "消えた本文"),
+            vector_hit("/b.md", 0, "残った本文"),
+        ];
+
         let chunks = select_context_chunks(&[], &vector, &ContextLimits::default(), |path| {
-            panic!("ベクトル検索で当たったファイルは読み直さない: {}", path)
+            (path == "/b.md").then(|| "残った本文".to_string())
         });
-        assert_eq!(chunks[0].text, "本文");
+
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].path, "/b.md");
+    }
+
+    #[test]
+    fn test_context_ignores_stale_chunk_not_in_current_content() {
+        // インデックス作成後に書き換えたファイルは、古いチャンクでなく今の本文を使う
+        let vector = vec![vector_hit("/a.md", 0, "書き換える前の本文")];
+
+        let chunks = select_context_chunks(&[], &vector, &ContextLimits::default(), |_| {
+            Some("書き換えた後の本文".to_string())
+        });
+
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].text, "書き換えた後の本文");
+    }
+
+    #[test]
+    fn test_context_skips_stale_chunk_and_takes_next_current_one() {
+        let vector = vec![
+            vector_hit("/a.md", 1, "消した段落"),
+            vector_hit("/a.md", 3, "残った段落その一"),
+            vector_hit("/a.md", 5, "残った段落その二"),
+        ];
+
+        let chunks = select_context_chunks(&[], &vector, &ContextLimits::default(), |_| {
+            Some("残った段落その一。残った段落その二。".to_string())
+        });
+
+        assert_eq!(
+            chunks[0].text,
+            format!("残った段落その一{}残った段落その二", CHUNK_SEPARATOR)
+        );
     }
 
     #[test]
@@ -357,7 +391,9 @@ mod tests {
             vector_hit("/a.md", 3, "四番目"),
         ];
 
-        let chunks = select_context_chunks(&[], &vector, &ContextLimits::default(), no_file);
+        let chunks = select_context_chunks(&[], &vector, &ContextLimits::default(), |_| {
+            Some("一番目二番目三番目四番目五番目六番目".to_string())
+        });
 
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].text, format!("二番目{}六番目", CHUNK_SEPARATOR));
@@ -365,10 +401,17 @@ mod tests {
 
     #[test]
     fn test_context_vector_text_is_capped_per_file() {
-        let long = "あ".repeat(600);
-        let vector = vec![vector_hit("/a.md", 0, &long), vector_hit("/a.md", 1, &long)];
+        let first = "あ".repeat(600);
+        let second = "い".repeat(600);
+        let content = format!("{}{}", first, second);
+        let vector = vec![
+            vector_hit("/a.md", 0, &first),
+            vector_hit("/a.md", 1, &second),
+        ];
 
-        let chunks = select_context_chunks(&[], &vector, &ContextLimits::default(), no_file);
+        let chunks = select_context_chunks(&[], &vector, &ContextLimits::default(), |_| {
+            Some(content.clone())
+        });
 
         assert_eq!(body_chars(&chunks[0]), 1000);
     }
@@ -444,7 +487,9 @@ mod tests {
             .map(|i| vector_hit(&format!("/{}.md", i), 0, "本文"))
             .collect();
 
-        let chunks = select_context_chunks(&[], &vector, &ContextLimits::default(), no_file);
+        let chunks = select_context_chunks(&[], &vector, &ContextLimits::default(), |_| {
+            Some("本文".to_string())
+        });
 
         assert_eq!(chunks.len(), 5);
         let paths: Vec<&str> = chunks.iter().map(|c| c.path.as_str()).collect();
@@ -452,15 +497,67 @@ mod tests {
     }
 
     #[test]
-    fn test_context_prefers_vector_chunks_for_file_hit_by_both() {
-        let fulltext = vec![fulltext_hit("/a.md", "冒頭")];
-        let vector = vec![vector_hit("/a.md", 4, "後半の該当箇所")];
+    fn test_context_fills_file_count_after_skipping_unreadable_files() {
+        // 読めないファイルを除いたあとで上限まで詰める
+        let limits = ContextLimits {
+            max_files: 2,
+            ..ContextLimits::default()
+        };
+        let vector = vec![
+            vector_hit("/gone.md", 0, "本文"),
+            vector_hit("/a.md", 0, "本文"),
+            vector_hit("/b.md", 0, "本文"),
+        ];
 
-        let chunks = select_context_chunks(&fulltext, &vector, &ContextLimits::default(), |_| {
-            Some("冒頭の文章".to_string())
+        let chunks = select_context_chunks(&[], &vector, &limits, |path| {
+            (path != "/gone.md").then(|| "本文".to_string())
         });
 
-        assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0].text, "後半の該当箇所");
+        let paths: Vec<&str> = chunks.iter().map(|c| c.path.as_str()).collect();
+        assert_eq!(paths, vec!["/a.md", "/b.md"]);
+    }
+
+    #[test]
+    fn test_context_hit_by_both_keeps_chunks_containing_fragment() {
+        let fulltext = vec![fulltext_hit("/a.md", "山猫軒")];
+        let vector = vec![
+            vector_hit("/a.md", 4, "料理店の名前は山猫軒である"),
+            vector_hit("/a.md", 0, "冒頭の段落"),
+        ];
+
+        let chunks = select_context_chunks(&fulltext, &vector, &ContextLimits::default(), |_| {
+            Some(format!("冒頭の段落{}料理店の名前は山猫軒である", "中".repeat(2000)))
+        });
+
+        assert_eq!(
+            chunks[0].text,
+            format!("冒頭の段落{}料理店の名前は山猫軒である", CHUNK_SEPARATOR)
+        );
+    }
+
+    #[test]
+    fn test_context_hit_by_both_uses_fragment_window_when_chunks_miss_it() {
+        // 全文検索の一致箇所がどのチャンクにも無ければ、2つ目の枠を一致箇所の窓に替える
+        let content = format!(
+            "冒頭の段落{}注文の多い料理店{}末尾の段落",
+            "前".repeat(2000),
+            "後".repeat(2000)
+        );
+        let fulltext = vec![fulltext_hit("/a.md", "注文の多い料理店")];
+        let vector = vec![
+            vector_hit("/a.md", 9, "末尾の段落"),
+            vector_hit("/a.md", 0, "冒頭の段落"),
+        ];
+
+        let chunks = select_context_chunks(&fulltext, &vector, &ContextLimits::default(), |_| {
+            Some(content.clone())
+        });
+
+        let parts: Vec<&str> = chunks[0].text.split(CHUNK_SEPARATOR).collect();
+        assert_eq!(parts.len(), 2);
+        // ファイル内の順に、一致箇所の窓・順位1位のチャンクと並ぶ
+        assert!(parts[0].contains("注文の多い料理店"));
+        assert_eq!(parts[0].chars().count(), 500);
+        assert_eq!(parts[1], "末尾の段落");
     }
 }
