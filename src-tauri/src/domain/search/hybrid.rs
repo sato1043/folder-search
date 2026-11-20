@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
@@ -20,6 +20,10 @@ pub struct HybridSearchResult {
 /// RRF（Reciprocal Rank Fusion）によるスコア統合
 ///
 /// `k` は調整パラメータ（一般的に60が使われる）
+///
+/// 各リストで同じパスは初出の1件だけを数え、順位は重複を除いた並びで付ける。
+/// ベクトル検索の結果はチャンク単位で同じファイルが複数回現れるため、
+/// そのまま数えるとファイルのスコアが重ねて加算される。
 pub fn reciprocal_rank_fusion(
     fulltext_paths: &[String],
     vector_paths: &[String],
@@ -27,12 +31,12 @@ pub fn reciprocal_rank_fusion(
 ) -> Vec<(String, f32)> {
     let mut scores: HashMap<String, f32> = HashMap::new();
 
-    for (rank, path) in fulltext_paths.iter().enumerate() {
-        *scores.entry(path.clone()).or_insert(0.0) += 1.0 / (k + rank as f32 + 1.0);
-    }
-
-    for (rank, path) in vector_paths.iter().enumerate() {
-        *scores.entry(path.clone()).or_insert(0.0) += 1.0 / (k + rank as f32 + 1.0);
+    for list in [fulltext_paths, vector_paths] {
+        let mut seen: HashSet<&str> = HashSet::new();
+        let unique_paths = list.iter().filter(|path| seen.insert(path.as_str()));
+        for (rank, path) in unique_paths.enumerate() {
+            *scores.entry(path.clone()).or_insert(0.0) += 1.0 / (k + rank as f32 + 1.0);
+        }
     }
 
     let mut ranked: Vec<(String, f32)> = scores.into_iter().collect();
