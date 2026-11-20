@@ -14,7 +14,9 @@ use crate::domain::llm::rag::{
     build_rag_prompt, extract_sources, select_context_chunks, ContextLimits, RagAnswer,
 };
 use crate::domain::llm::{DownloadedModelInfo, LlmInference, LlmModelInfo, StorageUsage};
-use crate::domain::search::hybrid::{reciprocal_rank_fusion, HybridSearchResult, RRF_K};
+use crate::domain::search::hybrid::{
+    display_snippet, reciprocal_rank_fusion, HybridSearchResult, RRF_K,
+};
 use crate::domain::search::{FulltextSearcher, SearchResult};
 use crate::domain::system::{recommend_models, ModelRecommendation, SystemInfo};
 use crate::infra::config::SettingsStore;
@@ -836,9 +838,8 @@ pub fn hybrid_search(
                 })
                 .unwrap_or_default();
 
-            let snippet = ft
-                .map(|r| r.snippet.clone())
-                .unwrap_or_else(|| vr.map(|r| r.text.clone()).unwrap_or_default());
+            let snippet =
+                display_snippet(ft.map(|r| r.snippet.as_str()), vr.map(|r| r.text.as_str()));
 
             let source = match (ft.is_some(), vr.is_some()) {
                 (true, true) => "hybrid",

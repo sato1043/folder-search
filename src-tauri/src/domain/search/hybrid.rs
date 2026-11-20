@@ -17,6 +17,16 @@ pub struct HybridSearchResult {
     pub source: String,
 }
 
+/// 画面へ渡すスニペットを選ぶ
+///
+/// 全文検索のスニペットを優先し、なければベクトル検索のチャンクテキストを使う。
+pub fn display_snippet(fulltext_snippet: Option<&str>, chunk_text: Option<&str>) -> String {
+    fulltext_snippet
+        .or(chunk_text)
+        .map(str::to_string)
+        .unwrap_or_default()
+}
+
 /// RRFの調整パラメータ（検索モードのハイブリッド検索とRAGで共有する）
 pub const RRF_K: f32 = 60.0;
 
@@ -68,6 +78,18 @@ mod tests {
         let top_paths: Vec<&str> = results.iter().take(2).map(|(p, _)| p.as_str()).collect();
         assert!(top_paths.contains(&"a.md"), "aは上位に来る");
         assert!(top_paths.contains(&"b.md"), "bは上位に来る");
+    }
+
+    #[test]
+    fn test_display_snippet_prefers_fulltext_snippet() {
+        let snippet = display_snippet(Some("<b>Rust</b>の資料"), Some("チャンク"));
+        assert_eq!(snippet, "<b>Rust</b>の資料");
+    }
+
+    #[test]
+    fn test_display_snippet_falls_back_to_chunk_text() {
+        assert_eq!(display_snippet(None, Some("チャンク")), "チャンク");
+        assert_eq!(display_snippet(None, None), "");
     }
 
     #[test]
