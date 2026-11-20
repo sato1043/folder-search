@@ -56,9 +56,13 @@ Tauri v2のアーキテクチャに従い、フロントエンド（WebView）�
 ```
 ユーザーの自然言語による質問
   ↓
-ハイブリッド検索（上記2.3）→ 上位5件のファイル
+ハイブリッド検索: 全文検索 上位5ファイル + ベクトル検索 上位20チャンク
   ↓
-コンテキスト構築（各ファイルの先頭1000文字）
+RRFでファイルを順位付け → 上位5ファイル
+  ↓
+コンテキスト構築（1ファイルあたり本文1000文字まで）:
+  ベクトル検索で当たったファイル → 当たったチャンクを順位順に最大2つ、ファイル内の順に並べる
+  全文検索だけで当たったファイル → 一致箇所を中心とする1000文字の窓（見つからなければ先頭1000文字）
   ↓
 プロンプト構築（ChatTemplate に応じた形式）:
   system メッセージ + コンテキスト + 質問 を組み立て
@@ -74,6 +78,7 @@ RagAnswer { answer, sources }
 
 **実装**:
 - チャットテンプレート: `domain/llm/chat_template.rs` の `ChatTemplate`（ChatML / Gemma / Llama3）
+- コンテキスト選定: `domain/llm/rag.rs` の `select_context_chunks()`（上限は `ContextLimits`。ベクトル検索のチャンクはインデックス作成時の本文を使い、ディスクを読むのは全文検索だけで当たったファイルに限る）
 - プロンプト構築: `domain/llm/rag.rs` の `build_rag_prompt()`（テンプレートを受け取り整形を委譲）
 - 参照元抽出: `domain/llm/rag.rs` の `extract_sources()`
 - LLM推論: `infra/llama/mod.rs` の `LlamaEngine`（`LlmInference` トレイト実装、context_length 可変）
