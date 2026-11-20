@@ -39,8 +39,13 @@ pub fn reciprocal_rank_fusion(
         }
     }
 
+    // 同点はパスの順に並べ、順位を実行ごとに変えない
     let mut ranked: Vec<(String, f32)> = scores.into_iter().collect();
-    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
     ranked
 }
 
