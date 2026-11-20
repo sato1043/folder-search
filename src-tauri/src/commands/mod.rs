@@ -1351,7 +1351,17 @@ pub async fn open_indexed_folder(
         *watcher_guard = None;
     }
 
-    // 全文検索エンジンを読み込む（無ければ前のフォルダのエンジンを残さない）
+    // 前のフォルダの索引を解放する。読み込みが無い・失敗した経路でも前の索引を残さない
+    {
+        let mut guard = state.engine.lock().map_err(|e| e.to_string())?;
+        *guard = None;
+    }
+    {
+        let mut guard = state.vector_index.lock().map_err(|e| e.to_string())?;
+        *guard = None;
+    }
+
+    // 全文検索エンジンを読み込む
     let fulltext_count = if index_path.exists() {
         let index_path_str = index_path.to_string_lossy().to_string();
         let engine = TantivySearchEngine::new(&index_path_str)
@@ -1361,22 +1371,21 @@ pub async fn open_indexed_folder(
         *guard = Some(engine);
         count
     } else {
-        let mut guard = state.engine.lock().map_err(|e| e.to_string())?;
-        *guard = None;
         0
     };
 
-    // ベクトルキャッシュを読み込む（無ければ前のフォルダのインデックスを残さない）
+    // ベクトルキャッシュを読み込む
     let vector_chunk_count = {
         let cache = VectorCache::new(&app_data_dir);
-        let loaded = cache.load(&folder_path).ok().map(|cached| {
+        if let Ok(cached) = cache.load(&folder_path) {
             let total = cached.metas.len() as u64;
-            (HnswVectorIndex::from_cache(cached), total)
-        });
-        let total = loaded.as_ref().map_or(0, |(_, total)| *total);
-        let mut guard = state.vector_index.lock().map_err(|e| e.to_string())?;
-        *guard = loaded.map(|(vector_index, _)| vector_index);
-        total
+            let vector_index = HnswVectorIndex::from_cache(cached);
+            let mut guard = state.vector_index.lock().map_err(|e| e.to_string())?;
+            *guard = Some(vector_index);
+            total
+        } else {
+            0
+        }
     };
 
     // フォルダパスを更新
