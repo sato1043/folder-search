@@ -209,15 +209,13 @@ Rustは `dotenvy` クレートで `.env` ファイルを読み込む（`src-taur
 
 
 ```
-main        ← リリース用。直接コミットしない
-  └── develop  ← 開発用メインブランチ
-        └── feature/*  ← 機能ブランチ
-        └── fix/*      ← バグ修正ブランチ
+main        ← 常にリリースできる状態に保つ。直接コミットしない
+  └── task/*  ← 作業ブランチ（main から派生し、PR で main へ戻す）
 ```
 
-- 機能ブランチは `feature/{phase}-{概要}` の命名とする（例: `feature/p2-fulltext-search`）
-- develop へのマージはPR経由で行う
-- main へのマージはリリース時に行う
+- 作業ブランチは `task/{作業ID}-{概要}` の命名とする（例: `task/20261120-3-rag-chunk-context`）。作業ID は `docs/tasks/` の作業書の ID
+- main へのマージはPR経由で行う。マージ後の作業ブランチは削除する
+- リリースは main で行う（手順は [RELEASING.md](RELEASING.md)）
 
 ## 5. コミットメッセージ
 
@@ -237,12 +235,7 @@ type:
 - `refactor`: リファクタリング
 - `chore`: ビルド、CI、依存関係の更新
 
-scope:
-- `frontend`: フロントエンド
-- `rust`: Rustネイティブレイヤー
-- `search`: 検索機能
-- `llm`: LLM関連
-- `e2e`: E2Eテスト
+scope: 作業ID（例: `feat(20261120-3): ...`）。作業書の無い変更では省く
 
 ## 6. PRチェックリスト
 
