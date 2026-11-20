@@ -93,6 +93,17 @@ mod tests {
     }
 
     #[test]
+    fn test_display_snippet_escapes_chunk_text() {
+        // 画面は snippet を HTML として描画するので、生のチャンクテキストに含まれる
+        // マークアップを実行させない
+        let snippet = display_snippet(None, Some(r#"<img src=x onerror="alert(1)"> & 'R&D'"#));
+        assert_eq!(
+            snippet,
+            "&lt;img src=x onerror=&quot;alert(1)&quot;&gt; &amp; &#39;R&amp;D&#39;"
+        );
+    }
+
+    #[test]
     fn test_rrf_orders_tied_scores_by_path() {
         // 各順位で全文とベクトルの1件ずつが同点になる。同点はパスの順に並ぶ
         let fulltext: Vec<String> = ["h.md", "f.md", "d.md", "b.md"]
