@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use super::chat_template::ChatTemplate;
 use crate::domain::embedding::VectorSearchResult;
-use crate::domain::search::hybrid::reciprocal_rank_fusion;
+use crate::domain::search::hybrid::{reciprocal_rank_fusion, RRF_K};
 use crate::domain::search::SearchResult;
 
 /// RAGで使用するコンテキストチャンク
@@ -46,9 +46,6 @@ impl Default for ContextLimits {
 
 /// 同じファイルの離れたチャンクをつなぐ区切り
 pub const CHUNK_SEPARATOR: &str = "\n…\n";
-
-/// RRFの調整パラメータ（検索モードのハイブリッド検索と同じ値）
-const RRF_K: f32 = 60.0;
 
 /// 検索結果からRAGのコンテキストを組み立てる
 ///

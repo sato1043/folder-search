@@ -14,7 +14,7 @@ use crate::domain::llm::rag::{
     build_rag_prompt, extract_sources, select_context_chunks, ContextLimits, RagAnswer,
 };
 use crate::domain::llm::{DownloadedModelInfo, LlmInference, LlmModelInfo, StorageUsage};
-use crate::domain::search::hybrid::{reciprocal_rank_fusion, HybridSearchResult};
+use crate::domain::search::hybrid::{reciprocal_rank_fusion, HybridSearchResult, RRF_K};
 use crate::domain::search::{FulltextSearcher, SearchResult};
 use crate::domain::system::{recommend_models, ModelRecommendation, SystemInfo};
 use crate::infra::config::SettingsStore;
@@ -816,7 +816,7 @@ pub fn hybrid_search(
         .iter()
         .map(|r| r.source_path.clone())
         .collect();
-    let ranked = reciprocal_rank_fusion(&fulltext_paths, &vector_paths, 60.0);
+    let ranked = reciprocal_rank_fusion(&fulltext_paths, &vector_paths, RRF_K);
 
     // 結果を構築（snippetは全文検索結果を優先、なければベクトル検索のチャンクテキスト）
     let results: Vec<HybridSearchResult> = ranked
