@@ -514,6 +514,10 @@ mod tests {
         assert!(fragment.contains("tantivy"));
         assert!(fragment.contains("R&D"));
         assert!(!fragment.contains("&amp;"));
+        // RAG は本文から fragment を探して窓を切り出すので、本文にそのまま含まれる
+        assert!(
+            "R&D部門では<script>タグを含むtantivyの資料を管理します。".contains(fragment.as_str())
+        );
         // 画面用の snippet は従来どおりエスケープ済み
         assert!(results[0].snippet.contains("&amp;"));
     }

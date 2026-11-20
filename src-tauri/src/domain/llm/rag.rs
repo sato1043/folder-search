@@ -61,8 +61,8 @@ impl ContextLimits {
     }
 }
 
-/// 同じファイルの離れたチャンクをつなぐ区切り
-pub const CHUNK_SEPARATOR: &str = "\n…\n";
+/// 1ファイルから選んだ部分（チャンク・一致箇所の窓）をつなぐ区切り
+const CHUNK_SEPARATOR: &str = "\n…\n";
 
 /// 検索結果からRAGのコンテキストを組み立てる
 ///
@@ -157,14 +157,10 @@ fn join_capped(parts: &[(usize, &str)], max_chars: usize) -> String {
 
 /// `fragment` を中心とする `width` 文字の窓を切り出し、本文での開始位置（バイト）と組で返す
 ///
-/// `fragment` が空か本文に見つからなければ先頭から切り出す。
+/// `fragment` が本文に見つからなければ先頭から切り出す（空の `fragment` は先頭で見つかる）。
 /// ファイルの端では窓をずらし、本文が足りる限り `width` 文字を保つ。
 fn window_around<'a>(content: &'a str, fragment: &str, width: usize) -> (usize, &'a str) {
-    let found = (!fragment.is_empty())
-        .then(|| content.find(fragment))
-        .flatten();
-
-    let start_char = match found {
+    let start_char = match content.find(fragment) {
         Some(byte_pos) => {
             let fragment_start = content[..byte_pos].chars().count();
             let center = fragment_start + fragment.chars().count() / 2;
@@ -451,7 +447,8 @@ mod tests {
         });
 
         assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0].text, format!("二番目{}六番目", CHUNK_SEPARATOR));
+        // 区切りの値もここで固定する
+        assert_eq!(chunks[0].text, "二番目\n…\n六番目");
     }
 
     #[test]
@@ -512,6 +509,35 @@ mod tests {
         });
 
         assert_eq!(chunks[0].text, "頭".repeat(1000));
+    }
+
+    #[test]
+    fn test_context_fulltext_empty_fragment_uses_head() {
+        let content = format!("{}{}", "頭".repeat(1000), "尾".repeat(1000));
+        let fulltext = vec![fulltext_hit("/b.md", "")];
+
+        let chunks = select_context_chunks(&fulltext, &[], &ContextLimits::default(), |_| {
+            Some(content.clone())
+        });
+
+        assert_eq!(chunks[0].text, "頭".repeat(1000));
+    }
+
+    #[test]
+    fn test_context_orders_files_by_fused_rank() {
+        // 両方で当たった b が先頭、全文1位の a、ベクトル2位の c の順
+        let fulltext = vec![fulltext_hit("/a.md", "本文"), fulltext_hit("/b.md", "本文")];
+        let vector = vec![
+            vector_hit("/b.md", 0, "本文"),
+            vector_hit("/c.md", 0, "本文"),
+        ];
+
+        let chunks = select_context_chunks(&fulltext, &vector, &ContextLimits::default(), |_| {
+            Some("本文".to_string())
+        });
+
+        let paths: Vec<&str> = chunks.iter().map(|c| c.path.as_str()).collect();
+        assert_eq!(paths, vec!["/b.md", "/a.md", "/c.md"]);
     }
 
     #[test]

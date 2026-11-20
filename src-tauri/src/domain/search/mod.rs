@@ -51,15 +51,15 @@ mod tests {
         };
 
         let value = serde_json::to_value(&result).unwrap();
-        let keys: Vec<&str> = value
+        let mut keys: Vec<&str> = value
             .as_object()
             .unwrap()
             .keys()
             .map(|k| k.as_str())
             .collect();
+        keys.sort_unstable();
 
         // フロントエンドへ渡す形は変えない（fragment はバックエンド内部でだけ使う）
-        assert_eq!(keys.len(), 4);
-        assert!(!keys.contains(&"fragment"));
+        assert_eq!(keys, vec!["path", "score", "snippet", "title"]);
     }
 }
