@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use serde::Serialize;
 
 use super::chat_template::ChatTemplate;
@@ -112,9 +114,11 @@ fn file_context_text(
     vector: &[VectorSearchResult],
     limits: &ContextLimits,
 ) -> String {
+    // 定型文のように同じ本文のチャンクが複数当たっても、二度は載せない
+    let mut seen_texts: HashSet<&str> = HashSet::new();
     let mut parts: Vec<(usize, &str)> = vector
         .iter()
-        .filter(|r| r.source_path == path)
+        .filter(|r| r.source_path == path && seen_texts.insert(r.text.as_str()))
         .filter_map(|r| {
             content
                 .find(r.text.as_str())
