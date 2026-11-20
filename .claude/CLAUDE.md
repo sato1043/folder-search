@@ -18,9 +18,10 @@
 
 ## 開発環境要件
 
-- Node.js >= 20
+- Node.js >= 22
 - Rust >= 1.77
-- pnpm（パッケージマネージャ）
+- pnpm 11（パッケージマネージャ。`package.json` の `packageManager` で版を固定。
+  依存のビルド可否は `pnpm-workspace.yaml` の `allowBuilds` で宣言する）
 - CMake（llama-cpp-2のビルドに必要）
 - libclang-dev（llama-cpp-2のbindgenに必要）
 - libwebkit2gtk-4.1-dev（Linux/WSL2のTauri WebView）

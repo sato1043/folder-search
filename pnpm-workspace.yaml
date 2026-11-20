@@ -1,0 +1,6 @@
+allowBuilds:
+  esbuild: true
+  # WebdriverIO が推移的に引くブラウザドライバ。install スクリプトはドライバの
+  # バイナリを取得するだけで、E2E は tauri-driver を使うため要らない
+  edgedriver: false
+  geckodriver: false
