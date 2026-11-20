@@ -44,6 +44,23 @@ impl Default for ContextLimits {
     }
 }
 
+impl ContextLimits {
+    /// 全文検索から引く件数
+    ///
+    /// 全文検索の結果はファイル単位なので、載せるファイルの数と同じにする。
+    pub fn fulltext_search_limit(&self) -> usize {
+        self.max_files
+    }
+
+    /// ベクトル検索から引く件数
+    ///
+    /// 結果はチャンク単位で少数のファイルへ偏り、今の本文に残らないチャンクも除くので、
+    /// 全ファイルをちょうど埋める件数（ファイル数 × 1ファイルのチャンク数）の2倍を引く。
+    pub fn vector_search_limit(&self) -> usize {
+        self.max_files * self.max_chunks_per_file * 2
+    }
+}
+
 /// 同じファイルの離れたチャンクをつなぐ区切り
 pub const CHUNK_SEPARATOR: &str = "\n…\n";
 
@@ -335,6 +352,22 @@ mod tests {
             distance: 0.1,
             text: text.to_string(),
         }
+    }
+
+    #[test]
+    fn test_context_limits_derive_search_limits() {
+        let limits = ContextLimits {
+            max_files: 3,
+            max_chunks_per_file: 4,
+            chars_per_file: 1000,
+        };
+        assert_eq!(limits.fulltext_search_limit(), 3);
+        assert_eq!(limits.vector_search_limit(), 24);
+
+        // 既定値は従来の件数（全文 5・ベクトル 20）を保つ
+        let default = ContextLimits::default();
+        assert_eq!(default.fulltext_search_limit(), 5);
+        assert_eq!(default.vector_search_limit(), 20);
     }
 
     fn body_chars(chunk: &ContextChunk) -> usize {

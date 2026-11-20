@@ -1004,9 +1004,6 @@ pub fn get_loaded_model_filename(state: State<'_, AppState>) -> Option<String> {
         .and_then(|g| g.as_ref().map(|c| c.filename.clone()))
 }
 
-/// RAGでベクトル検索から引くチャンクの件数
-const RAG_VECTOR_SEARCH_LIMIT: usize = 20;
-
 /// RAG質問応答（ストリーミング）
 #[tauri::command]
 pub fn chat(
@@ -1016,11 +1013,15 @@ pub fn chat(
 ) -> Result<RagAnswer, String> {
     // ハイブリッド検索でコンテキストを取得
     let context_chunks = {
+        let limits = ContextLimits::default();
+
         // 全文検索
         let fulltext_results = {
             let guard = state.engine.lock().map_err(|e| e.to_string())?;
             match guard.as_ref() {
-                Some(engine) => engine.search(&question, 5).unwrap_or_default(),
+                Some(engine) => engine
+                    .search(&question, limits.fulltext_search_limit())
+                    .unwrap_or_default(),
                 None => Vec::new(),
             }
         };
@@ -1036,10 +1037,8 @@ pub fn chat(
                     let query_embedding = generator
                         .generate(&query_with_prefix)
                         .map_err(|e| format!("embedding生成失敗: {}", e))?;
-                    // チャンク単位の結果なので、上位5ファイルを1ファイル2チャンクまで
-                    // 埋められる件数を引く
                     index
-                        .search_nearest(&query_embedding, RAG_VECTOR_SEARCH_LIMIT)
+                        .search_nearest(&query_embedding, limits.vector_search_limit())
                         .unwrap_or_default()
                 }
                 _ => Vec::new(),
@@ -1047,18 +1046,15 @@ pub fn chat(
         };
 
         // RRFでファイルを順位付けし、当たった箇所からコンテキストを組み立てる
-        select_context_chunks(
-            &fulltext_results,
-            &vector_results,
-            &ContextLimits::default(),
-            |path| match std::fs::read_to_string(path) {
+        select_context_chunks(&fulltext_results, &vector_results, &limits, |path| {
+            match std::fs::read_to_string(path) {
                 Ok(content) => Some(content),
                 Err(e) => {
                     eprintln!("RAGコンテキストから除外（読めない）: {}: {}", path, e);
                     None
                 }
-            },
-        )
+            }
+        })
     };
 
     // ロード済みモデルのテンプレートを取得（未設定時は ChatML）
