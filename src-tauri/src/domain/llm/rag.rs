@@ -52,12 +52,11 @@ const RRF_K: f32 = 60.0;
 
 /// 検索結果からRAGのコンテキストを組み立てる
 ///
-/// RRFでファイルを順位付けし、上位のファイルごとに本文を選ぶ。
-/// - ベクトル検索で当たったファイル: 当たったチャンクを順位の高い順に選び、ファイル内の順に並べる
-/// - 全文検索だけで当たったファイル: 一致箇所を中心とする窓。見つからなければ先頭
-///
+/// RRFでファイルを順位付けし、上位のファイルごとに今の本文から載せる部分を選ぶ。
 /// 当たった箇所がファイルの後半にあっても、LLMへ届けるためである。
-/// `read_file` は全文検索だけで当たったファイルの本文を読むときにだけ呼ぶ。
+///
+/// 本文は `read_file` で読み直す。読めないファイル（インデックス作成後に消えた等）は除き、
+/// 次の順位のファイルで上限まで詰める。インデックスにだけ残る古い本文を渡さないためである。
 pub fn select_context_chunks(
     fulltext: &[SearchResult],
     vector: &[VectorSearchResult],
@@ -70,80 +69,107 @@ pub fn select_context_chunks(
 
     ranked
         .iter()
-        .take(limits.max_files)
         .filter_map(|(path, _)| {
-            let text = match vector_chunks_text(path, vector, limits) {
-                Some(text) => text,
-                None => {
-                    let content = read_file(path)?;
-                    let fragment = fulltext
-                        .iter()
-                        .find(|r| &r.path == path)
-                        .map_or("", |r| r.fragment.as_str());
-                    window_around(&content, fragment, limits.chars_per_file)
-                }
-            };
+            let content = read_file(path)?;
+            let fragment = fulltext
+                .iter()
+                .find(|r| &r.path == path)
+                .map_or("", |r| r.fragment.as_str());
             Some(ContextChunk {
                 path: path.clone(),
-                text,
+                text: file_context_text(&content, path, fragment, vector, limits),
             })
         })
+        .take(limits.max_files)
         .collect()
 }
 
-/// ベクトル検索で当たったチャンクを、そのファイルの本文として組み立てる
+/// 1ファイルの今の本文から、コンテキストに載せる部分を選んでつなぐ
 ///
-/// 当たっていなければ `None` を返す。
-fn vector_chunks_text(
+/// - ベクトル検索で当たったチャンクのうち、今の本文に残るものを順位の高い順に選ぶ。
+///   全文検索の一致箇所がどれにも含まれなければ、最後の枠を一致箇所を中心とする窓に替える
+/// - 残るチャンクが無ければ、一致箇所を中心とする窓。見つからなければ先頭
+///
+/// 選んだ部分はファイル内の順に並べる。
+fn file_context_text(
+    content: &str,
     path: &str,
+    fragment: &str,
     vector: &[VectorSearchResult],
     limits: &ContextLimits,
-) -> Option<String> {
-    let mut hits: Vec<&VectorSearchResult> = vector
+) -> String {
+    let mut parts: Vec<(usize, &str)> = vector
         .iter()
         .filter(|r| r.source_path == path)
+        .filter_map(|r| {
+            content
+                .find(r.text.as_str())
+                .map(|pos| (pos, r.text.as_str()))
+        })
         .take(limits.max_chunks_per_file)
         .collect();
-    if hits.is_empty() {
-        return None;
+    if parts.is_empty() {
+        return window_around(content, fragment, limits.chars_per_file)
+            .1
+            .to_string();
     }
-    hits.sort_by_key(|r| r.chunk_index);
 
-    let mut remaining = limits.chars_per_file;
-    let parts: Vec<String> = hits
+    // 一致箇所が今の本文に無ければ（インデックスが古い等）、窓は先頭になるので替えない
+    let fragment_missed =
+        content.contains(fragment) && !parts.iter().any(|(_, text)| text.contains(fragment));
+    if fragment_missed {
+        parts.truncate(limits.max_chunks_per_file.saturating_sub(1));
+        let width = limits.chars_per_file / limits.max_chunks_per_file.max(1);
+        parts.push(window_around(content, fragment, width));
+    }
+    parts.sort_by_key(|(pos, _)| *pos);
+    join_capped(&parts, limits.chars_per_file)
+}
+
+/// 部分を区切りでつなぐ。本文は合わせて `max_chars` 文字までに切る
+fn join_capped(parts: &[(usize, &str)], max_chars: usize) -> String {
+    let mut remaining = max_chars;
+    parts
         .iter()
-        .map(|r| {
-            let part: String = r.text.chars().take(remaining).collect();
+        .map(|(_, text)| {
+            let part: String = text.chars().take(remaining).collect();
             remaining -= part.chars().count();
             part
         })
         .filter(|part| !part.is_empty())
-        .collect();
-    Some(parts.join(CHUNK_SEPARATOR))
+        .collect::<Vec<_>>()
+        .join(CHUNK_SEPARATOR)
 }
 
-/// `fragment` を中心とする `width` 文字の窓を切り出す
+/// `fragment` を中心とする `width` 文字の窓を切り出し、本文での開始位置（バイト）と組で返す
 ///
 /// `fragment` が空か本文に見つからなければ先頭から切り出す。
 /// ファイルの端では窓をずらし、本文が足りる限り `width` 文字を保つ。
-fn window_around(content: &str, fragment: &str, width: usize) -> String {
-    let chars: Vec<char> = content.chars().collect();
+fn window_around<'a>(content: &'a str, fragment: &str, width: usize) -> (usize, &'a str) {
     let found = (!fragment.is_empty())
         .then(|| content.find(fragment))
         .flatten();
 
-    let start = match found {
+    let start_char = match found {
         Some(byte_pos) => {
             let fragment_start = content[..byte_pos].chars().count();
             let center = fragment_start + fragment.chars().count() / 2;
-            let end = (center.saturating_sub(width / 2) + width).min(chars.len());
+            let end = (center.saturating_sub(width / 2) + width).min(content.chars().count());
             end.saturating_sub(width)
         }
         None => 0,
     };
-    chars[start..(start + width).min(chars.len())]
-        .iter()
-        .collect()
+    let start = byte_offset(content, start_char);
+    let end = byte_offset(content, start_char + width);
+    (start, &content[start..end])
+}
+
+/// 先頭から `char_pos` 文字目のバイト位置。本文の長さを超えれば本文の長さ
+fn byte_offset(content: &str, char_pos: usize) -> usize {
+    content
+        .char_indices()
+        .nth(char_pos)
+        .map_or(content.len(), |(pos, _)| pos)
 }
 
 /// RAG用のシステムメッセージ
@@ -526,7 +552,10 @@ mod tests {
         ];
 
         let chunks = select_context_chunks(&fulltext, &vector, &ContextLimits::default(), |_| {
-            Some(format!("冒頭の段落{}料理店の名前は山猫軒である", "中".repeat(2000)))
+            Some(format!(
+                "冒頭の段落{}料理店の名前は山猫軒である",
+                "中".repeat(2000)
+            ))
         });
 
         assert_eq!(
@@ -559,5 +588,25 @@ mod tests {
         assert!(parts[0].contains("注文の多い料理店"));
         assert_eq!(parts[0].chars().count(), 500);
         assert_eq!(parts[1], "末尾の段落");
+    }
+
+    #[test]
+    fn test_context_hit_by_both_keeps_chunks_when_fragment_is_not_in_content() {
+        // 一致箇所が今の本文に無ければ、窓は先頭になるだけなのでチャンクを替えない
+        let content = format!("冒頭の段落{}末尾の段落", "中".repeat(2000));
+        let fulltext = vec![fulltext_hit("/a.md", "書き換える前の一致箇所")];
+        let vector = vec![
+            vector_hit("/a.md", 9, "末尾の段落"),
+            vector_hit("/a.md", 0, "冒頭の段落"),
+        ];
+
+        let chunks = select_context_chunks(&fulltext, &vector, &ContextLimits::default(), |_| {
+            Some(content.clone())
+        });
+
+        assert_eq!(
+            chunks[0].text,
+            format!("冒頭の段落{}末尾の段落", CHUNK_SEPARATOR)
+        );
     }
 }

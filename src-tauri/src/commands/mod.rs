@@ -1051,7 +1051,13 @@ pub fn chat(
             &fulltext_results,
             &vector_results,
             &ContextLimits::default(),
-            |path| std::fs::read_to_string(path).ok(),
+            |path| match std::fs::read_to_string(path) {
+                Ok(content) => Some(content),
+                Err(e) => {
+                    eprintln!("RAGコンテキストから除外（読めない）: {}: {}", path, e);
+                    None
+                }
+            },
         )
     };
 
